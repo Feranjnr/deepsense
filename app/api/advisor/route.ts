@@ -8,11 +8,19 @@ const GROQ_API = "https://api.groq.com/openai/v1/chat/completions"
 
 export async function POST(req: NextRequest) {
   try {
-    const { messages, apiKey } = await req.json()
+    const { messages, system, apiKey } = await req.json()
     if (!apiKey) {
       return new Response(JSON.stringify({ error: "Missing apiKey" }), {
         status: 401, headers: { "Content-Type": "application/json" },
       })
+    }
+
+    const llmMessages: { role: string; content: string }[] = []
+    if (system) {
+      llmMessages.push({ role: "system", content: system })
+    }
+    for (const m of messages) {
+      llmMessages.push({ role: m.role, content: m.content || m.text || "" })
     }
 
     const res = await fetch(GROQ_API, {
@@ -23,7 +31,7 @@ export async function POST(req: NextRequest) {
       },
       body: JSON.stringify({
         model: "llama-3.3-70b-versatile",
-        messages,
+        messages: llmMessages,
         max_tokens: 1000,
         temperature: 0.4,
       }),

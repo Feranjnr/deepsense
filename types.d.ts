@@ -25,6 +25,17 @@ declare module "@mysten/dapp-kit" {
   }
   export const ConnectButton: ComponentType<ConnectButtonProps>
 
+  // ConnectModal
+  export interface ConnectModalProps {
+    open?: boolean
+    onOpenChange?: (open: boolean) => void
+    trigger?: ReactNode
+  }
+  export const ConnectModal: ComponentType<ConnectModalProps>
+
+  // Network config helper
+  export function createNetworkConfig(config: Record<string, { url: string }>): any
+
   // Hooks — type-safe enough for TS compilation:
   export interface Account {
     address: string
@@ -37,15 +48,29 @@ declare module "@mysten/dapp-kit" {
   export function useDisconnectWallet(): any
   export function useCurrentWallet(): any
   export function useSuiClient(): any
+  export function useSuiClientContext(): any
+  export function useAccounts(): Account[]
+  export function useSignAndExecuteTransaction(): any
+  export function useSignTransaction(): any
 }
 
-// @mysten/sui stubs
-declare module "@mysten/sui" {
-  // provisionally empty — all typing done via any at runtime
+// @mysten/sui subpath stubs
+declare module "@mysten/sui/jsonRpc" {
+  export function getJsonRpcFullnodeUrl(network: string): string
+}
+
+declare module "@mysten/sui/client" {
+  export class SuiClient {
+    constructor(options: { url: string })
+    getAllBalances(params: { owner: string }): Promise<any[]>
+    getCoins(params: { owner: string; coinType?: string }): Promise<any>
+    getBalance(params: { owner: string; coinType?: string }): Promise<any>
+  }
 }
 
 // @tanstack/react-query stubs (re-exported in Providers)
 declare module "@tanstack/react-query" {
+  import { ComponentType, ReactNode } from "react"
   export class QueryClient {
     constructor()
   }

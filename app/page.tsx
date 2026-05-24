@@ -67,9 +67,6 @@ const MOCK_POOLS = [
   { id: "pool_usdt_usdc", base: "USDT", quote: "USDC", price: 0.9998, change: 0.0,   volume: 22_000_000, spread: 0.001,liquidity: 80_000_000 },
 ]
 
-// ─── LIVE PRICE HOOK base: "USDT", quote: "USDC", price: 0.9998, change: 0.0,   volume: 22_000_000, spread: 0.001,liquidity: 80_000_000 },
-
-
 // ─── LIVE PRICE HOOK ───────────────────────────────────────────────────────────
 // Fetches SUI, ETH, BTC, USDT, USDC from CoinGecko every 30 s.
 // Falls back silently to MOCK_POOLS on any network error.
@@ -91,7 +88,7 @@ function useCoinGeckoPrices(refetchMs = 30_000): { pools: any[]; loading: boolea
         const data = (await resp.json()) as any // CoinGeckoResponse
         if (cancelled) return
         const map: Record<string, { usd: number; chg: number }> = {}
-        for (const [k, v] of Object.entries(data)) map[k] = { usd: v.usd, chg: v.usd_24h_change }
+        for (const [k, v] of Object.entries(data)) map[k] = { usd: (v as any).usd, chg: (v as any).usd_24h_change }
         setPrices(map)
         setLoading(false)
       } catch {
@@ -946,9 +943,8 @@ function coinToPosition(
   }
 }
 
-function isWasmCoinType(ct: string): boolean {
-  // Sui MVR coin types always contain "::coin::COIN"
-  return ct.includes("::coin::COIN")
+function isValidCoinType(ct: string): boolean {
+  return ct.includes("::")
 }
 
 // ─── ROOT APP ──────────────────────────────────────────────────────────────────
@@ -977,13 +973,13 @@ export default function DeepSenseClientPage() {
         for (let i = 0; i < balances.length; i++) {
           const entry = balances[i]
           const coinType = typeof entry.coinType === "string" ? entry.coinType : ""
-          if (!isWasmCoinType(coinType)) continue
+          if (!isValidCoinType(coinType)) continue
 
           const totalBalance = typeof entry.totalBalance === "string"
             ? BigInt(entry.totalBalance)
             : BigInt(entry.totalBalance)
           const symbol = coinSymbol(coinType)
-          fetched.push(coinToPosition(coinType, Number(totalBalance), 9, symbol, i))
+          fetched.push(coinToPosition(coinType, Number(totalBalance), COIN_DEFS[coinType]?.decimals ?? 9, symbol, i))
         }
         // Sort by highest USD-equivalent size
         fetched.sort((a: RpcPosition, b: RpcPosition) => b.size - a.size)
@@ -1009,13 +1005,12 @@ export default function DeepSenseClientPage() {
   const [ groqKey, setApiKeyInput]     = useState("")
   const [showKey, setShowKey]        = useState(false)
 
-  // scratch window field for runtime Anthropic key injection
+  // Load persisted key on mount; keep window global in sync
   useEffect(() => {
-    if (typeof window !== "undefined") {
-      (window as any).__GROQ_KEY__ =
-        (typeof window !== "undefined" && sessionStorage.getItem("ds_groq_key")) || ""
-    }
-  }, [ groqKey])
+    const saved = sessionStorage.getItem("ds_groq_key") || ""
+    if (saved && !groqKey) setApiKeyInput(saved)
+    ;(window as any).__GROQ_KEY__ = groqKey || saved
+  }, [groqKey])
 
   const net = NET[network as keyof typeof NET]
 
@@ -1171,7 +1166,7 @@ export default function DeepSenseClientPage() {
               <PositionTable positions={positions} onSelect={setSelectedPos} selected={selectedPos} />
             </div>
             <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
-              <AIAdvisor positions={positions} pools={pools}  groqKey={(window as any).__GROQ_KEY__ || ""} />
+              <AIAdvisor positions={positions} pools={pools}  groqKey={groqKey} />
               <RiskFeed events={riskEvents} />
               <Card style={{ padding: 16 }}>
                 <SectionHeader title="POSITION HEALTH" />
@@ -1232,7 +1227,7 @@ export default function DeepSenseClientPage() {
         {/* AI ADVISOR TAB */}
         {tab === "advisor" && (
           <div style={{ display: "grid", gridTemplateColumns: "1fr 360px", gap: 14 }}>
-            <AIAdvisor positions={positions} pools={pools}  groqKey={(window as any).__GROQ_KEY__ || ""} />
+            <AIAdvisor positions={positions} pools={pools}  groqKey={groqKey} />
             <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
               <RiskFeed events={riskEvents} />
               <Card style={{ padding: 16 }}>
