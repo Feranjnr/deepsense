@@ -1,0 +1,56 @@
+/* ─── DeepSense global styles ───────────────────────────────────────────────── */
+@import url("https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;600;700&family=IBM+Plex+Sans:wght@400;600;700&display=swap");
+
+* { box-sizing: border-box; margin: 0; padding: 0; }
+
+:root {
+  --bg:        #03080f;
+  --surface:   #060d16;
+  --card:      #08111c;
+  --border:    #0e2035;
+  --border-hi: #1a3d5c;
+  --accent:    #0af5d4;
+  --blue:      #0a7fff;
+  --gold:      #f5c842;
+  --danger:    #ff4567;
+  --warn:      #ff9900;
+  --safe:      #00e676;
+  --text:      #d0e8f0;
+  --muted:     #3a5a70;
+  --muted-hi:  #5a7a90;
+  --mono: 'IBM Plex Mono','Courier New',monospace;
+  --sans: 'IBM Plex Sans',system-ui,sans-serif;
+}
+
+html, body {
+  background: var(--bg);
+  color: var(--text);
+  font-family: var(--sans);
+  min-height: 100vh;
+}
+
+::-webkit-scrollbar { width: 4px; height: 4px; }
+::-webkit-scrollbar-track { background: var(--bg); }
+::-webkit-scrollbar-thumb { background: var(--border-hi); border-radius: 2px; }
+
+input[type=range] {
+  appearance: none; height: 3px; border-radius: 2px;
+  background: var(--border); outline: none;
+}
+input[type=range]::-webkit-slider-thumb {
+  appearance: none; width: 14px; height: 14px;
+  border-radius: 50%; cursor: pointer;
+}
+
+@keyframes pulse { 0%,100%{opacity:1} 50%{opacity:0.3} }
+@keyframes fadeUp { from{opacity:0;transform:translateY(8px)} to{opacity:1;transform:translateY(0)} }
+
+button { cursor: pointer; font-family: var(--mono); }
+button:hover { opacity: 0.85; }
+button:disabled { opacity: 0.5; cursor: not-allowed; }
+
+input, textarea {
+  font-family: var(--sans); color: var(--text);
+}
+
+a { color: var(--accent); }

@@ -1,0 +1,42 @@
+// app/api/advisor/route.ts
+// Groq-compatible LLM proxy — DeepSense AI Advisor
+export const runtime = "edge"
+
+import { NextRequest } from "next/server"
+
+const GROQ_API = "https://api.groq.com/openai/v1/chat/completions"
+
+export async function POST(req: NextRequest) {
+  try {
+    const { messages, apiKey } = await req.json()
+    if (!apiKey) {
+      return new Response(JSON.stringify({ error: "Missing apiKey" }), {
+        status: 401, headers: { "Content-Type": "application/json" },
+      })
+    }
+
+    const res = await fetch(GROQ_API, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${apiKey}`,
+      },
+      body: JSON.stringify({
+        model: "llama-3.3-70b-versatile",
+        messages,
+        max_tokens: 1000,
+        temperature: 0.4,
+      }),
+    })
+
+    const data = await res.json()
+    const reply = data.choices?.[0]?.message?.content || "No response from model."
+    return new Response(JSON.stringify({ reply }), {
+      headers: { "Content-Type": "application/json" },
+    })
+  } catch (err: any) {
+    return new Response(JSON.stringify({ error: err.message }), {
+      status: 500, headers: { "Content-Type": "application/json" },
+    })
+  }
+}
