@@ -71,7 +71,7 @@ const MOCK_POOLS = [
 // Fetches SUI, ETH, BTC, USDT, USDC from CoinGecko every 30 s.
 // Falls back silently to MOCK_POOLS on any network error.
 
-function useCoinGeckoPrices(refetchMs = 30_000): { pools: any[]; loading: boolean } {
+function useCoinGeckoPrices(refetchMs = 30_000): { pools: any[]; loading: boolean; prices: Record<string, { usd: number; chg: number }> | null } {
   const [prices, setPrices] = useState<Record<string, { usd: number; chg: number }> | null>(null)
   const [loading, setLoading] = useState(true)
 
@@ -100,7 +100,7 @@ function useCoinGeckoPrices(refetchMs = 30_000): { pools: any[]; loading: boolea
     return () => { cancelled = true; clearInterval(id) }
   }, [refetchMs])
 
-  if (loading || !prices) return { pools: MOCK_POOLS, loading }
+  if (loading || !prices) return { pools: MOCK_POOLS, loading, prices: null }
 
   const derived: any[] = []
   if (prices.sui && prices["usd-coin"]) {
@@ -139,7 +139,7 @@ function useCoinGeckoPrices(refetchMs = 30_000): { pools: any[]; loading: boolea
     })
   }
 
-  return { pools: derived.length === 5 ? derived : MOCK_POOLS, loading }
+  return { pools: derived.length === 5 ? derived : MOCK_POOLS, loading, prices }
 }
 
 // Mock positions used when no wallet is connected (demo mode)
@@ -274,14 +274,14 @@ function LiveTicker({ pools }: { pools: any[] }) {
 }
 
 // ─── PORTFOLIO OVERVIEW ────────────────────────────────────────────────────────
-function PortfolioOverview({ positions, network }: any) {
+function PortfolioOverview({ positions, network, isLive }: any) {
   const totalValue = positions.reduce((s: number, p: any) => s + p.size, 0)
   const totalPnl   = positions.reduce((s: number, p: any) => s + p.pnl,   0)
   const avgHealth  = Math.round(positions.reduce((s: number, p: any) => s + p.health, 0) / positions.length)
   const atRisk     = positions.filter((p: any) => p.health < 60).length
   const net = NET[network as keyof typeof NET]
   const stats = [
-    { label: "PORTFOLIO VALUE", value: fmt.usd(totalValue), color: C.text,   sub: `${positions.length} positions` },
+    { label: isLive ? "PORTFOLIO VALUE" : "PORTFOLIO VALUE (Demo)", value: fmt.usd(totalValue), color: C.text,   sub: `${positions.length} positions` },
     { label: "TOTAL PNL",        value: fmt.usd(Math.abs(totalPnl)), color: totalPnl >= 0 ? C.safe : C.danger, sub: totalPnl >= 0 ? "▲ Profitable" : "▼ In loss" },
     { label: "AVG HEALTH",       value: `${avgHealth}%`,               color: healthColor(avgHealth),        sub: "Across all positions" },
     { label: "AT RISK",          value: `${atRisk} pos`,               color: atRisk > 0 ? C.danger : C.safe, sub: "Health < 60%" },
@@ -300,17 +300,15 @@ function PortfolioOverview({ positions, network }: any) {
 }
 
 // ─── POSITION TABLE ────────────────────────────────────────────────────────────
-function PositionTable({ positions, onSelect, selected }: any) {
+function PositionTable({ positions, onSelect, selected, isLive }: any) {
   return (
     <Card style={{ marginBottom: 16 }}>
       <div style={{ padding: "14px 16px", borderBottom: `1px solid ${C.border}` }}>
-        <SectionHeader title="OPEN POSITIONS" sub={(() => {
-          const first = positions[0]
-          if (!first) return "No positions"
-          return first.type === "SPOT"
-            ? "Real-time via Sui RPC · Live coin balance"
-            : "Real-time via Sui RPC · Protocol specific (Derived from object)"
-        })()} />
+        <SectionHeader title="OPEN POSITIONS" sub={
+          isLive
+            ? "Live on-chain data · Sui Mainnet"
+            : "Demo data · Connect wallet for live positions"
+        } />
       </div>
       <div style={{ overflowX: "auto" }}>
         <table style={{ width: "100%", borderCollapse: "collapse" }}>
@@ -394,7 +392,7 @@ function DeepBookPanel({ pools, selectedPool }: any) {
   return (
     <Card>
       <div style={{ padding: "14px 16px", borderBottom: `1px solid ${C.border}` }}>
-        <SectionHeader title="DEEPBOOK ORDERBOOK" sub={`${pool.base}/${pool.quote} · CLOB · ${pool.live ? "Live" : "Simulated"}`} />
+        <SectionHeader title="DEEPBOOK ORDERBOOK" sub={`${pool.base}/${pool.quote} · CLOB · Simulated orderbook`} />
         <div style={{ display: "flex", gap: 16 }}>
           {[
             ["24H VOL", pool.volume ? fmt.usd(pool.volume) : "—"],
@@ -847,7 +845,9 @@ function TradingPanel({ pool, network }: any) {
           border: `1px solid ${C.warn}22`, borderRadius: 3,
         }}>
           <span style={{ fontFamily: SANS, fontSize: 11, color: C.warn }}>
-            ⚠ Testnet mode — no real funds at risk. Switch to Mainnet when ready.
+            {network === "mainnet"
+              ? "⚠ Mainnet mode — real funds. Trade carefully."
+              : "⚠ Testnet mode — no real funds at risk. Switch to Mainnet when ready."}
           </span>
         </div>
       </div>
@@ -907,24 +907,21 @@ type RpcPosition = {
   pool: string
 }
 
+const SYMBOL_TO_CG: Record<string, string> = {
+  SUI: "sui", ETH: "ethereum", BTC: "bitcoin", USDT: "tether", USDC: "usd-coin",
+}
+
 function coinToPosition(
   coinType: string,
-  totalBalance: number | bigint,  // in smallest unit
+  rawAmt: number,
   decimals: number,
   symbol: string,
   index: number,
+  prices: Record<string, { usd: number; chg: number }> | null,
 ): RpcPosition {
-  const rawAmt = typeof totalBalance === "bigint" ? Number(totalBalance) : totalBalance
   const amount = rawAmt / Math.pow(10, decimals)
-  // Derive a mock USD proxy from a known counter value
-  // For SUI we attempt to price via testnet faucet-like default
-  // For known ref coins we hardcode a reference price (static mock fallback)
-  let refPrice = 1
-  if (symbol === "SUI")   refPrice = 2.47  // snapshot price as denomination base
-  if (symbol === "ETH")   refPrice = 3821
-  if (symbol === "BTC")   refPrice = 67400
-  if (symbol === "USDT")  refPrice = 1
-  if (symbol === "USDC")  refPrice = 1
+  const cgId = SYMBOL_TO_CG[symbol]
+  const refPrice = (cgId && prices?.[cgId]?.usd) ? prices[cgId].usd : 1
 
   return {
     id:         `onchain-${symbol}-${index}`,
@@ -947,45 +944,73 @@ function isValidCoinType(ct: string): boolean {
   return ct.includes("::")
 }
 
+// ─── DYNAMIC RISK EVENTS ──────────────────────────────────────────────────────
+function generateRiskEvents(positions: any[], isLive: boolean): any[] {
+  if (!isLive) return MOCK_RISK_EVENTS
+  const now = new Date()
+  const timeStr = now.toTimeString().slice(0, 8)
+  const totalValue = positions.reduce((s: number, p: any) => s + p.size, 0)
+  const events: any[] = []
+
+  for (const p of positions) {
+    if (p.health < 60) {
+      events.push({ time: timeStr, event: "Liquidation Warning", position: `${p.asset} ${p.type}`, severity: "HIGH", detail: `Health at ${p.health}% — approaching liquidation` })
+    }
+  }
+
+  if (totalValue > 0) {
+    const byAsset: Record<string, number> = {}
+    for (const p of positions) byAsset[p.asset] = (byAsset[p.asset] ?? 0) + p.size
+    for (const [asset, val] of Object.entries(byAsset)) {
+      if (val / totalValue > 0.7) {
+        events.push({ time: timeStr, event: "Correlated Exposure", position: "All Positions", severity: "MEDIUM", detail: `${Math.round(val / totalValue * 100)}% portfolio in ${asset}` })
+      }
+    }
+    for (const p of positions) {
+      if (p.size / totalValue > 0.5) {
+        events.push({ time: timeStr, event: "Concentration Risk", position: `${p.asset} ${p.type}`, severity: "MEDIUM", detail: `${Math.round(p.size / totalValue * 100)}% of portfolio in one position` })
+      }
+    }
+  }
+
+  events.push({ time: timeStr, event: "Live Prices", position: "Market Data", severity: "LOW", detail: "CoinGecko feed active · 30s refresh" })
+  return events
+}
+
 // ─── ROOT APP ──────────────────────────────────────────────────────────────────
 export default function DeepSenseClientPage() {
   const [tab, setTab]               = useState("dashboard")
-  const [network, setNetwork]       = useState("testnet")
+  const [network, setNetwork]       = useState("mainnet")
   // ── live wallet state ──
   const currentAccount       = useCurrentAccount()
   const suiClient            = useSuiClient()
   const walletAddr           = currentAccount?.address ?? null
   const isWalletConnected    = !!walletAddr
-  // ── positions: live when wallet is connected, mock otherwise ──
-  const [livePositions, setLivePositions] = useState<RpcPosition[]>([])
+  // ── raw balances (re-fetched on wallet/network change) ──
+  const [rawBalances, setRawBalances] = useState<Array<{coinType: string; rawAmt: number; symbol: string; decimals: number}>>([])
   const [isLoadingBalances, setIsLoadingBalances] = useState(false)
 
-  // Fetch coin balances whenever the wallet address changes
+  // Fetch raw coin balances when wallet or network changes
   useEffect(() => {
-    if (!walletAddr || !suiClient) return
+    if (!walletAddr || !suiClient) { setRawBalances([]); return }
     setIsLoadingBalances(true)
     let cancelled = false
     ;(async () => {
       try {
         const balances = await suiClient.getAllBalances({ owner: walletAddr })
         if (cancelled) return
-        const fetched: RpcPosition[] = []
+        const fetched: Array<{coinType: string; rawAmt: number; symbol: string; decimals: number}> = []
         for (let i = 0; i < balances.length; i++) {
           const entry = balances[i]
           const coinType = typeof entry.coinType === "string" ? entry.coinType : ""
           if (!isValidCoinType(coinType)) continue
-
-          const totalBalance = typeof entry.totalBalance === "string"
-            ? BigInt(entry.totalBalance)
-            : BigInt(entry.totalBalance)
+          const rawAmt = Number(BigInt(entry.totalBalance))
           const symbol = coinSymbol(coinType)
-          fetched.push(coinToPosition(coinType, Number(totalBalance), COIN_DEFS[coinType]?.decimals ?? 9, symbol, i))
+          const decimals = COIN_DEFS[coinType]?.decimals ?? 9
+          fetched.push({ coinType, rawAmt, symbol, decimals })
         }
-        // Sort by highest USD-equivalent size
-        fetched.sort((a: RpcPosition, b: RpcPosition) => b.size - a.size)
-        if (!cancelled) setLivePositions(fetched)
+        if (!cancelled) setRawBalances(fetched)
       } catch {
-        // RPC may fail if insufficient permissions or wrong network
         console.warn("getAllBalances failed — staying on mock data for this session")
       } finally {
         if (!cancelled) setIsLoadingBalances(false)
@@ -995,10 +1020,14 @@ export default function DeepSenseClientPage() {
   }, [walletAddr, suiClient, network])
 
   // ── computed props passed to child components ──
-  const positions          = isWalletConnected && livePositions.length > 0 ? livePositions : MOCK_POSITIONS
+  const { pools, prices }  = useCoinGeckoPrices()
+  // Derive positions from raw balances + live prices — re-prices automatically on each CoinGecko refresh
+  const livePositions: RpcPosition[] = rawBalances
+    .map((b, i) => coinToPosition(b.coinType, b.rawAmt, b.decimals, b.symbol, i, prices))
+    .sort((a, b) => b.size - a.size)
   const isPositionsLive    = isWalletConnected && livePositions.length > 0
-  const { pools }          = useCoinGeckoPrices()
-  const riskEvents         = MOCK_RISK_EVENTS
+  const positions          = isPositionsLive ? livePositions : MOCK_POSITIONS
+  const riskEvents         = generateRiskEvents(positions, isPositionsLive)
 
   const [selectedPos, setSelectedPos] = useState<any>(null)
   const [selectedPool, setSelectedPool] = useState(MOCK_POOLS[0])
@@ -1111,10 +1140,10 @@ export default function DeepSenseClientPage() {
         {/* DASHBOARD TAB */}
         {tab === "dashboard" && (
           <>
-            <PortfolioOverview positions={positions} network={network} />
+            <PortfolioOverview positions={positions} network={network} isLive={isPositionsLive} />
             <div style={{ display: "grid", gridTemplateColumns: "1fr 340px", gap: 14 }}>
               <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
-                <PositionTable positions={positions} onSelect={setSelectedPos} selected={selectedPos} />
+                <PositionTable positions={positions} onSelect={setSelectedPos} selected={selectedPos} isLive={isPositionsLive} />
                 <RiskFeed events={riskEvents} />
               </div>
               <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
@@ -1137,7 +1166,7 @@ export default function DeepSenseClientPage() {
                 )}
                 {isWalletConnected && livePositions.length === 0 && !isLoadingBalances && (
                   <Card style={{ padding: 20, textAlign: "center", border: `1px solid ${C.safe}33` }}>
-                    <Glow size={13} color={C.safe} style={{ display: "block", marginBottom: 8 }}>WALLET CONNECTED ✓</Glow>
+                    <Glow size={13} color={C.safe} style={{ display: "block", marginBottom: 8 }}>WALLET CONNECTED · MAINNET ✓</Glow>
                     <div style={{ fontFamily: SANS, fontSize: 12, color: C.text, marginBottom: 4 }}>
                       Address: <span style={{ fontFamily: MONO, color: C.accent }}>{fmt.addr(walletAddr)}</span>
                     </div>
@@ -1162,8 +1191,8 @@ export default function DeepSenseClientPage() {
         {tab === "positions" && (
           <div style={{ display: "grid", gridTemplateColumns: "1fr 400px", gap: 14 }}>
             <div>
-              <PortfolioOverview positions={positions} network={network} />
-              <PositionTable positions={positions} onSelect={setSelectedPos} selected={selectedPos} />
+              <PortfolioOverview positions={positions} network={network} isLive={isPositionsLive} />
+              <PositionTable positions={positions} onSelect={setSelectedPos} selected={selectedPos} isLive={isPositionsLive} />
             </div>
             <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
               <AIAdvisor positions={positions} pools={pools}  groqKey={groqKey} />
@@ -1254,7 +1283,7 @@ export default function DeepSenseClientPage() {
           <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 14 }}>
             <ScenarioSimulator positions={positions} />
             <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
-              <PortfolioOverview positions={positions} network={network} />
+              <PortfolioOverview positions={positions} network={network} isLive={isPositionsLive} />
               <Card style={{ padding: 16 }}>
                 <SectionHeader title="POSITION HEALTH" />
                 {positions.map(p => (
