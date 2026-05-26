@@ -2,7 +2,11 @@
 
 import { useState, useEffect, useRef } from "react"
 import { SuiClientProvider, WalletProvider, ConnectButton as DappConnectButton } from "@mysten/dapp-kit"
-import { useCurrentAccount, useSuiClient } from "@mysten/dapp-kit"
+import { useCurrentAccount, useSuiClient, useSignAndExecuteTransaction } from "@mysten/dapp-kit"
+import { Transaction } from "@mysten/sui/transactions"
+import { useRiskGuardian } from "@/app/hooks/useRiskGuardian"
+import { useRiskEngine } from "@/app/hooks/useRiskEngine"
+import { RISK_GUARDIAN } from "@/app/config/contracts"
 
 // ─── DESIGN TOKENS ─────────────────────────────────────────────────────────────
 const C = {
@@ -998,6 +1002,7 @@ export default function DeepSenseClientPage() {
     ;(async () => {
       try {
         const balances = await suiClient.getAllBalances({ owner: walletAddr })
+        console.log("[DeepSense] Raw balances from RPC:", JSON.stringify(balances, null, 2))
         if (cancelled) return
         const fetched: Array<{coinType: string; rawAmt: number; symbol: string; decimals: number}> = []
         for (let i = 0; i < balances.length; i++) {
@@ -1009,8 +1014,10 @@ export default function DeepSenseClientPage() {
           const decimals = COIN_DEFS[coinType]?.decimals ?? 9
           fetched.push({ coinType, rawAmt, symbol, decimals })
         }
+        console.log("[DeepSense] Processed positions:", fetched.length, fetched)
         if (!cancelled) setRawBalances(fetched)
-      } catch {
+      } catch (err) {
+        console.log("[DeepSense] getAllBalances error:", err)
         console.warn("getAllBalances failed — staying on mock data for this session")
       } finally {
         if (!cancelled) setIsLoadingBalances(false)
@@ -1027,12 +1034,73 @@ export default function DeepSenseClientPage() {
     .sort((a, b) => b.size - a.size)
   const isPositionsLive    = isWalletConnected && livePositions.length > 0
   const positions          = isPositionsLive ? livePositions : MOCK_POSITIONS
+  console.log("[DeepSense] Wallet status:", { isWalletConnected, walletAddr, livePositionsCount: livePositions.length, isLoadingBalances })
   const riskEvents         = generateRiskEvents(positions, isPositionsLive)
 
   const [selectedPos, setSelectedPos] = useState<any>(null)
   const [selectedPool, setSelectedPool] = useState(MOCK_POOLS[0])
   const [ groqKey, setApiKeyInput]     = useState("")
   const [showKey, setShowKey]        = useState(false)
+
+  // ── Risk Guardian on-chain state ──
+  const { policyState, events: guardianEvents, loading: guardianLoading, error: guardianError, refetch: refetchGuardian } = useRiskGuardian()
+  const { riskAssessment, actionLog } = useRiskEngine({
+    prices: prices ?? {},
+    policyState,
+    enabled: true,
+    walletConnected: isWalletConnected,
+  })
+  const { mutate: signAndExecute } = useSignAndExecuteTransaction()
+  const [txStatus, setTxStatus] = useState<string>("")
+
+  function setTxMsg(msg: string) {
+    setTxStatus(msg)
+    setTimeout(() => setTxStatus(""), 5000)
+  }
+
+  function buildAdminTx(fn: string, includesClock: boolean): Transaction {
+    const tx = new Transaction()
+    const args = [tx.object(RISK_GUARDIAN.POLICY_ID), tx.object(RISK_GUARDIAN.ADMIN_CAP_ID)]
+    if (includesClock) args.push(tx.object(RISK_GUARDIAN.CLOCK))
+    tx.moveCall({ target: `${RISK_GUARDIAN.PACKAGE_ID}::${RISK_GUARDIAN.MODULE}::${fn}`, arguments: args })
+    return tx
+  }
+
+  function handleAdminResume() {
+    try {
+      signAndExecute(
+        { transaction: buildAdminTx("admin_resume", true) },
+        {
+          onSuccess: () => { setTxMsg("✓ Protocol resumed successfully"); setTimeout(refetchGuardian, 2000) },
+          onError:   (e: any) => setTxMsg(`✗ ${e?.message ?? "Transaction failed"}`),
+        },
+      )
+    } catch (e: any) { setTxMsg(`✗ ${e?.message ?? "Transaction failed"}`) }
+  }
+
+  function handleRevokeAgent() {
+    try {
+      signAndExecute(
+        { transaction: buildAdminTx("revoke_agent", true) },
+        {
+          onSuccess: () => { setTxMsg("✓ Agent revoked successfully"); setTimeout(refetchGuardian, 2000) },
+          onError:   (e: any) => setTxMsg(`✗ ${e?.message ?? "Transaction failed"}`),
+        },
+      )
+    } catch (e: any) { setTxMsg(`✗ ${e?.message ?? "Transaction failed"}`) }
+  }
+
+  function handleResetBudget() {
+    try {
+      signAndExecute(
+        { transaction: buildAdminTx("reset_agent_budget", false) },
+        {
+          onSuccess: () => { setTxMsg("✓ Budget reset successfully"); setTimeout(refetchGuardian, 2000) },
+          onError:   (e: any) => setTxMsg(`✗ ${e?.message ?? "Transaction failed"}`),
+        },
+      )
+    } catch (e: any) { setTxMsg(`✗ ${e?.message ?? "Transaction failed"}`) }
+  }
 
   // Load persisted key on mount; keep window global in sync
   useEffect(() => {
@@ -1078,6 +1146,7 @@ export default function DeepSenseClientPage() {
         <div style={{ display: "flex", gap: 0, flex: 1 }}>
           {[
             { id: "dashboard",    label: "DASHBOARD"   },
+            { id: "guardian",     label: "GUARDIAN"    },
             { id: "positions",   label: "POSITIONS"   },
             { id: "deepbook",    label: "DEEPBOOK"    },
             { id: "advisor",     label: "AI ADVISOR"  },
@@ -1186,6 +1255,447 @@ export default function DeepSenseClientPage() {
             </div>
           </>
         )}
+
+        {/* GUARDIAN TAB */}
+        {tab === "guardian" && (() => {
+          function riskScoreColor(s: number) { return s <= 40 ? C.safe : s <= 70 ? C.warn : C.danger }
+          function shortEventType(full: string) { return full.split("::").pop() ?? full }
+          function fmtTs(ms: string | null | undefined) {
+            if (!ms) return "—"
+            return new Date(Number(ms)).toLocaleString(undefined, { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit", second: "2-digit" })
+          }
+          function eventSummary(type: string, json: unknown): string {
+            if (!json || typeof json !== "object") return ""
+            const j = json as Record<string, unknown>
+            const name = shortEventType(type)
+            if (name === "RiskScoreUpdated") return `score ${j.old_score} → ${j.new_score}`
+            if (name === "ProtocolPaused")   return `risk score at ${j.risk_score}`
+            if (name === "ProtocolResumed")  return `resumed by ${String(j.resumed_by ?? "").slice(0,10)}…`
+            if (name === "ParametersAdjusted") return `leverage ${j.old_max_leverage}→${j.new_max_leverage} · liq ${j.old_liquidation_threshold}→${j.new_liquidation_threshold}`
+            if (name === "AgentRevoked")     return `agent ${String(j.revoked_agent ?? "").slice(0,10)}…`
+            if (name === "AgentUpdated")     return `${String(j.old_agent ?? "").slice(0,10)}… → ${String(j.new_agent ?? "").slice(0,10)}…`
+            if (name === "AdminOverride") {
+              const raw = j.action
+              const decoded = Array.isArray(raw)
+                ? String.fromCharCode(...(raw as number[]))
+                : String(raw ?? "")
+              return `action: ${decoded}`
+            }
+            if (name === "PolicyCreated")    return `leverage ${j.max_leverage}bp · liq ${j.liquidation_threshold}bp`
+            return ""
+          }
+
+          if (guardianLoading) return (
+            <Card style={{ padding: 40, textAlign: "center" }}>
+              <div style={{ fontFamily: MONO, fontSize: 14, color: C.accent, animation: "pulse 1.2s infinite" }}>
+                READING ON-CHAIN STATE…
+              </div>
+              <div style={{ fontFamily: SANS, fontSize: 12, color: C.muted, marginTop: 10 }}>
+                Querying Sui Testnet · RiskGuardian contract
+              </div>
+            </Card>
+          )
+
+          if (guardianError) return (
+            <Card style={{ padding: 24, border: `1px solid ${C.danger}44` }}>
+              <Glow color={C.danger} size={12} style={{ display: "block", marginBottom: 8 }}>CONTRACT READ ERROR</Glow>
+              <div style={{ fontFamily: MONO, fontSize: 11, color: C.mutedHi }}>{guardianError}</div>
+            </Card>
+          )
+
+          if (!policyState) return (
+            <Card style={{ padding: 32, textAlign: "center" }}>
+              <Glow size={13} color={C.muted} style={{ display: "block", marginBottom: 8 }}>NO RISK POLICY FOUND</Glow>
+              <div style={{ fontFamily: SANS, fontSize: 12, color: C.muted }}>Deploy the contract first: <code>sui client publish</code></div>
+            </Card>
+          )
+
+          return (
+            <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
+
+              {/* Testnet badge */}
+              <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+                <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+                  <div style={{
+                    display: "flex", alignItems: "center", gap: 6, padding: "4px 12px",
+                    border: `1px solid ${C.warn}44`, borderRadius: 3, background: C.warn+"11",
+                  }}>
+                    <span style={{ width: 6, height: 6, borderRadius: "50%", background: C.warn, boxShadow: `0 0 8px ${C.warn}`, display: "inline-block" }} />
+                    <span style={{ fontFamily: MONO, fontSize: 10, color: C.warn, letterSpacing: 2 }}>TESTNET · RISK GUARDIAN</span>
+                  </div>
+                  <span style={{ fontFamily: MONO, fontSize: 10, color: C.muted }}>Live on-chain · auto-refresh 10s</span>
+                </div>
+                <button onClick={refetchGuardian} style={{
+                  fontFamily: MONO, fontSize: 10, padding: "4px 12px",
+                  background: C.accent+"11", border: `1px solid ${C.accent}44`,
+                  color: C.accent, borderRadius: 2, cursor: "pointer", letterSpacing: 1,
+                }}>↺ REFRESH</button>
+              </div>
+
+              {/* AI RISK ENGINE panel */}
+              <Card style={{ border: `1px solid ${C.accent}33`, background: C.accent+"05" }}>
+                <div style={{ padding: "14px 16px", borderBottom: `1px solid ${C.border}`, display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                  <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+                    <span style={{
+                      width: 8, height: 8, borderRadius: "50%", background: C.safe,
+                      boxShadow: `0 0 10px ${C.safe}`, display: "inline-block",
+                      animation: "pulse 2s infinite",
+                    }} />
+                    <Glow size={11} style={{ letterSpacing: 3 }}>AI RISK ENGINE</Glow>
+                  </div>
+                  <span style={{ fontFamily: SANS, fontSize: 11, color: C.mutedHi }}>Autonomous risk monitoring · CoinGecko feed · 30s refresh</span>
+                </div>
+
+                <div style={{ padding: 16 }}>
+                  {!riskAssessment ? (
+                    <div style={{ fontFamily: MONO, fontSize: 12, color: C.muted, animation: "pulse 1.2s infinite" }}>
+                      Waiting for price data…
+                    </div>
+                  ) : (
+                    <>
+                      {/* Score + level */}
+                      <div style={{ display: "flex", alignItems: "center", gap: 20, marginBottom: 16 }}>
+                        <div>
+                          <div style={{ fontFamily: MONO, fontSize: 9, color: C.muted, letterSpacing: 3, marginBottom: 6 }}>AI-CALCULATED SCORE</div>
+                          <div style={{ display: "flex", alignItems: "baseline", gap: 4 }}>
+                            <Glow color={riskScoreColor(riskAssessment.score)} size={48} weight={700}>{riskAssessment.score}</Glow>
+                            <span style={{ fontFamily: MONO, fontSize: 16, color: C.muted }}>/100</span>
+                          </div>
+                        </div>
+                        <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+                          {/* Level badge */}
+                          <div style={{
+                            padding: "6px 16px", borderRadius: 3, fontFamily: MONO, fontSize: 13, fontWeight: 700,
+                            letterSpacing: 2,
+                            background: (
+                              riskAssessment.level === "CRITICAL" ? C.danger+"22" :
+                              riskAssessment.level === "HIGH"     ? C.warn+"22"   :
+                              riskAssessment.level === "MEDIUM"   ? C.gold+"22"   : C.safe+"22"
+                            ),
+                            border: `1px solid ${
+                              riskAssessment.level === "CRITICAL" ? C.danger+"66" :
+                              riskAssessment.level === "HIGH"     ? C.warn+"66"   :
+                              riskAssessment.level === "MEDIUM"   ? C.gold+"66"   : C.safe+"66"
+                            }`,
+                            color: (
+                              riskAssessment.level === "CRITICAL" ? C.danger :
+                              riskAssessment.level === "HIGH"     ? C.warn   :
+                              riskAssessment.level === "MEDIUM"   ? C.gold   : C.safe
+                            ),
+                            animation: riskAssessment.level === "CRITICAL" ? "pulse 1s infinite" : "none",
+                            textShadow: `0 0 10px ${
+                              riskAssessment.level === "CRITICAL" ? C.danger :
+                              riskAssessment.level === "HIGH"     ? C.warn   :
+                              riskAssessment.level === "MEDIUM"   ? C.gold   : C.safe
+                            }88`,
+                          }}>{riskAssessment.level}</div>
+                          <div style={{ fontFamily: MONO, fontSize: 9, color: C.muted, letterSpacing: 1 }}>
+                            updated {new Date(riskAssessment.timestamp).toLocaleTimeString()}
+                          </div>
+                        </div>
+
+                        {/* Findings */}
+                        <div style={{ flex: 1, borderLeft: `1px solid ${C.border}`, paddingLeft: 20 }}>
+                          <div style={{ fontFamily: MONO, fontSize: 9, color: C.muted, letterSpacing: 3, marginBottom: 8 }}>FINDINGS</div>
+                          {riskAssessment.reasons.length === 0 ? (
+                            <div style={{ fontFamily: SANS, fontSize: 12, color: C.safe }}>✓ No elevated risk factors detected</div>
+                          ) : (
+                            riskAssessment.reasons.map((r, i) => (
+                              <div key={i} style={{ fontFamily: SANS, fontSize: 12, color: C.warn, marginBottom: 5, display: "flex", gap: 6 }}>
+                                <span>⚠</span><span>{r}</span>
+                              </div>
+                            ))
+                          )}
+                        </div>
+                      </div>
+
+                      {/* vs On-Chain comparison */}
+                      {policyState && (
+                        <div style={{
+                          padding: "10px 14px", borderRadius: 4,
+                          background: C.bg, border: `1px solid ${C.border}`,
+                          display: "flex", alignItems: "center", gap: 16, flexWrap: "wrap",
+                        }}>
+                          <div>
+                            <div style={{ fontFamily: MONO, fontSize: 9, color: C.muted, letterSpacing: 2, marginBottom: 3 }}>AI SCORE</div>
+                            <Glow color={riskScoreColor(riskAssessment.score)} size={18} weight={700}>{riskAssessment.score}</Glow>
+                          </div>
+                          <div style={{ fontFamily: MONO, fontSize: 14, color: C.border }}>vs</div>
+                          <div>
+                            <div style={{ fontFamily: MONO, fontSize: 9, color: C.muted, letterSpacing: 2, marginBottom: 3 }}>ON-CHAIN SCORE</div>
+                            <Glow color={riskScoreColor(policyState.risk_score)} size={18} weight={700}>{policyState.risk_score}</Glow>
+                          </div>
+                          {Math.abs(riskAssessment.score - policyState.risk_score) > 10 && (
+                            <div style={{
+                              marginLeft: "auto", padding: "6px 12px", borderRadius: 3,
+                              background: C.gold+"18", border: `1px solid ${C.gold}44`,
+                              fontFamily: MONO, fontSize: 10, color: C.gold, letterSpacing: 1,
+                            }}>⚠ Score drift detected — sync recommended</div>
+                          )}
+                        </div>
+                      )}
+                    </>
+                  )}
+                </div>
+              </Card>
+
+              {/* PENDING ACTIONS */}
+              {actionLog.length > 0 && (
+                <Card style={{ border: `1px solid ${C.gold}33` }}>
+                  <div style={{ padding: "14px 16px", borderBottom: `1px solid ${C.border}`, display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                    <div>
+                      <Glow size={11} color={C.gold} style={{ letterSpacing: 3, display: "block", marginBottom: 3 }}>PENDING AGENT ACTIONS</Glow>
+                      <span style={{ fontFamily: SANS, fontSize: 12, color: C.mutedHi }}>AI recommendations awaiting on-chain sync</span>
+                    </div>
+                    <button
+                      onClick={() => {
+                        if (!riskAssessment) return
+                        try {
+                          const tx = new Transaction()
+                          tx.moveCall({
+                            target: `${RISK_GUARDIAN.PACKAGE_ID}::${RISK_GUARDIAN.MODULE}::update_risk_score`,
+                            arguments: [
+                              tx.object(RISK_GUARDIAN.POLICY_ID),
+                              tx.pure.u64(riskAssessment.score),
+                              tx.object(RISK_GUARDIAN.CLOCK),
+                            ],
+                          })
+                          signAndExecute(
+                            { transaction: tx },
+                            {
+                              onSuccess: () => { setTxMsg(`✓ Risk score synced to ${riskAssessment.score}`); setTimeout(refetchGuardian, 2000) },
+                              onError:   (e: any) => setTxMsg(`✗ ${e?.message ?? "Sync failed"}`),
+                            },
+                          )
+                        } catch (e: any) { setTxMsg(`✗ ${e?.message ?? "Sync failed"}`) }
+                      }}
+                      style={{
+                        fontFamily: MONO, fontSize: 11, fontWeight: 700, letterSpacing: 2,
+                        padding: "8px 18px", borderRadius: 4, cursor: "pointer",
+                        background: C.gold+"22", border: `1px solid ${C.gold}66`,
+                        color: C.gold, textShadow: `0 0 8px ${C.gold}88`,
+                      }}
+                    >SYNC TO CHAIN →</button>
+                  </div>
+                  <div>
+                    {actionLog.slice(0, 8).map((entry, i) => (
+                      <div key={i} style={{
+                        padding: "10px 16px",
+                        borderBottom: i < Math.min(actionLog.length, 8) - 1 ? `1px solid ${C.border}` : "none",
+                        display: "flex", justifyContent: "space-between", alignItems: "center", gap: 12,
+                      }}>
+                        <div style={{ display: "flex", gap: 10, alignItems: "center" }}>
+                          <div style={{ width: 3, height: 16, background: entry.action.includes("Pause") ? C.danger : C.gold, borderRadius: 2, flexShrink: 0 }} />
+                          <span style={{ fontFamily: MONO, fontSize: 11, color: C.text }}>{entry.action}</span>
+                        </div>
+                        <div style={{ display: "flex", gap: 12, alignItems: "center", flexShrink: 0 }}>
+                          <Tag color={riskScoreColor(entry.score)}>{entry.score}/100</Tag>
+                          <span style={{ fontFamily: MONO, fontSize: 9, color: C.muted }}>
+                            {new Date(entry.timestamp).toLocaleTimeString()}
+                          </span>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </Card>
+              )}
+
+              {/* Section A — Status Cards */}
+              <div style={{ display: "grid", gridTemplateColumns: "repeat(4,1fr)", gap: 10 }}>
+                {/* Risk Score */}
+                <Card style={{ padding: "16px 18px" }}>
+                  <div style={{ fontFamily: MONO, fontSize: 9, color: C.muted, letterSpacing: 3, marginBottom: 8 }}>RISK SCORE</div>
+                  <div style={{ display: "flex", alignItems: "baseline", gap: 2 }}>
+                    <Glow color={riskScoreColor(policyState.risk_score)} size={32} weight={700}>{policyState.risk_score}</Glow>
+                    <span style={{ fontFamily: MONO, fontSize: 14, color: C.muted }}>/100</span>
+                  </div>
+                  <div style={{ marginTop: 8, height: 4, background: C.border, borderRadius: 2, overflow: "hidden" }}>
+                    <div style={{
+                      height: "100%", width: `${policyState.risk_score}%`,
+                      background: riskScoreColor(policyState.risk_score),
+                      boxShadow: `0 0 8px ${riskScoreColor(policyState.risk_score)}`,
+                      transition: "width 0.6s ease", borderRadius: 2,
+                    }} />
+                  </div>
+                  <div style={{ fontFamily: SANS, fontSize: 11, color: C.mutedHi, marginTop: 6 }}>
+                    {policyState.risk_score <= 40 ? "Low risk" : policyState.risk_score <= 70 ? "Elevated risk" : "Critical — action needed"}
+                  </div>
+                </Card>
+
+                {/* Protocol Status */}
+                <Card style={{ padding: "16px 18px", border: `1px solid ${policyState.is_paused ? C.danger+"44" : C.border}`, background: policyState.is_paused ? C.danger+"08" : C.card }}>
+                  <div style={{ fontFamily: MONO, fontSize: 9, color: C.muted, letterSpacing: 3, marginBottom: 8 }}>PROTOCOL STATUS</div>
+                  <Glow color={policyState.is_paused ? C.danger : C.safe} size={22} weight={700}>
+                    {policyState.is_paused ? "PAUSED" : "ACTIVE"}
+                  </Glow>
+                  <div style={{ fontFamily: SANS, fontSize: 11, color: C.mutedHi, marginTop: 6 }}>
+                    {policyState.is_paused ? "AI agent triggered pause" : "Protocol operating normally"}
+                  </div>
+                </Card>
+
+                {/* Max Leverage */}
+                <Card style={{ padding: "16px 18px" }}>
+                  <div style={{ fontFamily: MONO, fontSize: 9, color: C.muted, letterSpacing: 3, marginBottom: 8 }}>MAX LEVERAGE</div>
+                  <Glow color={C.gold} size={28} weight={700}>{(policyState.max_leverage / 100).toFixed(0)}x</Glow>
+                  <div style={{ fontFamily: SANS, fontSize: 11, color: C.mutedHi, marginTop: 6 }}>{policyState.max_leverage}bp on-chain</div>
+                </Card>
+
+                {/* Liquidation Threshold */}
+                <Card style={{ padding: "16px 18px" }}>
+                  <div style={{ fontFamily: MONO, fontSize: 9, color: C.muted, letterSpacing: 3, marginBottom: 8 }}>LIQUIDATION THRESHOLD</div>
+                  <Glow color={C.blue} size={28} weight={700}>{(policyState.liquidation_threshold / 100).toFixed(0)}%</Glow>
+                  <div style={{ fontFamily: SANS, fontSize: 11, color: C.mutedHi, marginTop: 6 }}>{policyState.liquidation_threshold}bp on-chain</div>
+                </Card>
+              </div>
+
+              {/* Section B — Agent Info */}
+              <Card style={{ padding: "14px 18px" }}>
+                <div style={{ fontFamily: MONO, fontSize: 9, color: C.muted, letterSpacing: 3, marginBottom: 12 }}>AI AGENT STATUS</div>
+                <div style={{ display: "grid", gridTemplateColumns: "repeat(4,1fr)", gap: 16 }}>
+                  <div>
+                    <div style={{ fontFamily: MONO, fontSize: 9, color: C.muted, letterSpacing: 2, marginBottom: 5 }}>AGENT ADDRESS</div>
+                    <span style={{ fontFamily: MONO, fontSize: 11, color: C.accent }}>{fmt.addr(policyState.agent)}</span>
+                  </div>
+                  <div>
+                    <div style={{ fontFamily: MONO, fontSize: 9, color: C.muted, letterSpacing: 2, marginBottom: 5 }}>AGENT STATUS</div>
+                    <Tag color={policyState.agent_active ? C.safe : C.danger}>{policyState.agent_active ? "ACTIVE" : "REVOKED"}</Tag>
+                  </div>
+                  <div>
+                    <div style={{ fontFamily: MONO, fontSize: 9, color: C.muted, letterSpacing: 2, marginBottom: 5 }}>ACTIONS REMAINING</div>
+                    <Glow color={policyState.actions_remaining < 10 ? C.warn : C.text} size={14} weight={700}>
+                      {policyState.actions_remaining}/{policyState.max_actions}
+                    </Glow>
+                  </div>
+                  <div>
+                    <div style={{ fontFamily: MONO, fontSize: 9, color: C.muted, letterSpacing: 2, marginBottom: 5 }}>TOTAL ACTIONS TAKEN</div>
+                    <Glow color={C.text} size={14} weight={700}>{policyState.total_actions}</Glow>
+                  </div>
+                </div>
+              </Card>
+
+              <div style={{ display: "grid", gridTemplateColumns: "1fr 320px", gap: 14 }}>
+                {/* Section C — Event Log */}
+                <Card>
+                  <div style={{ padding: "14px 16px", borderBottom: `1px solid ${C.border}` }}>
+                    <SectionHeader
+                      title="ON-CHAIN AUDIT LOG"
+                      sub="Every AI action is permanently recorded on Sui · Immutable"
+                    />
+                  </div>
+                  {guardianEvents.length === 0 ? (
+                    <div style={{ padding: 24, fontFamily: SANS, fontSize: 12, color: C.muted, textAlign: "center" }}>
+                      No events found for this policy.
+                    </div>
+                  ) : (
+                    guardianEvents.map((e, i) => {
+                      const name = shortEventType(e.type)
+                      const summary = eventSummary(e.type, e.parsedJson)
+                      const isHighSev = name === "ProtocolPaused" || name === "AgentRevoked"
+                      const isMedSev  = name === "AdminOverride" || name === "RiskScoreUpdated"
+                      const dotColor  = isHighSev ? C.danger : isMedSev ? C.warn : C.accent
+                      return (
+                        <div key={i} style={{
+                          padding: "11px 16px",
+                          borderBottom: i < guardianEvents.length - 1 ? `1px solid ${C.border}` : "none",
+                          display: "flex", gap: 12, alignItems: "flex-start",
+                        }}>
+                          <div style={{
+                            width: 3, alignSelf: "stretch", background: dotColor,
+                            borderRadius: 2, flexShrink: 0, boxShadow: `0 0 6px ${dotColor}`,
+                          }} />
+                          <div style={{ flex: 1, minWidth: 0 }}>
+                            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 3 }}>
+                              <span style={{ fontFamily: MONO, fontSize: 11, color: C.text, fontWeight: 600 }}>{name}</span>
+                              <span style={{ fontFamily: MONO, fontSize: 9, color: C.muted, flexShrink: 0, marginLeft: 8 }}>{fmtTs(e.timestampMs)}</span>
+                            </div>
+                            {summary && <div style={{ fontFamily: SANS, fontSize: 11, color: C.mutedHi, marginBottom: 4 }}>{summary}</div>}
+                            <a
+                              href={`https://testnet.suivision.xyz/txblock/${e.txDigest}`}
+                              target="_blank" rel="noopener noreferrer"
+                              style={{ fontFamily: MONO, fontSize: 9, color: C.blue, textDecoration: "none", letterSpacing: 0.5 }}
+                            >{e.txDigest.slice(0, 20)}… ↗</a>
+                          </div>
+                        </div>
+                      )
+                    })
+                  )}
+                </Card>
+
+                {/* Section D — Admin Controls */}
+                <Card>
+                  <div style={{ padding: "14px 16px", borderBottom: `1px solid ${C.border}` }}>
+                    <SectionHeader title="ADMIN CONTROLS" sub="Human override · DAO governance" />
+                  </div>
+                  <div style={{ padding: 16, display: "flex", flexDirection: "column", gap: 10 }}>
+                    <div style={{
+                      padding: "8px 10px", background: C.warn+"0a",
+                      border: `1px solid ${C.warn}22`, borderRadius: 3, marginBottom: 4,
+                    }}>
+                      <span style={{ fontFamily: SANS, fontSize: 11, color: C.warn }}>
+                        ⚠ Requires AdminCap · On-chain governance
+                      </span>
+                    </div>
+
+                    {policyState.is_paused && (
+                      <button onClick={handleAdminResume} style={{
+                        padding: "11px 14px", fontFamily: MONO, fontSize: 11, fontWeight: 700,
+                        letterSpacing: 2, borderRadius: 4, cursor: "pointer",
+                        background: C.safe+"18", border: `1px solid ${C.safe}66`,
+                        color: C.safe, textShadow: `0 0 8px ${C.safe}88`,
+                      }}>RESUME PROTOCOL</button>
+                    )}
+
+                    <button onClick={handleRevokeAgent} disabled={!policyState.agent_active} style={{
+                      padding: "11px 14px", fontFamily: MONO, fontSize: 11, fontWeight: 700,
+                      letterSpacing: 2, borderRadius: 4, cursor: policyState.agent_active ? "pointer" : "not-allowed",
+                      background: C.danger+"18", border: `1px solid ${C.danger}66`,
+                      color: policyState.agent_active ? C.danger : C.muted,
+                      textShadow: policyState.agent_active ? `0 0 8px ${C.danger}88` : "none",
+                      opacity: policyState.agent_active ? 1 : 0.4,
+                    }}>REVOKE AGENT</button>
+
+                    <button onClick={handleResetBudget} style={{
+                      padding: "11px 14px", fontFamily: MONO, fontSize: 11, fontWeight: 700,
+                      letterSpacing: 2, borderRadius: 4, cursor: "pointer",
+                      background: C.gold+"18", border: `1px solid ${C.gold}66`,
+                      color: C.gold, textShadow: `0 0 8px ${C.gold}88`,
+                    }}>RESET AGENT BUDGET</button>
+
+                    <button style={{
+                      padding: "11px 14px", fontFamily: MONO, fontSize: 11, fontWeight: 700,
+                      letterSpacing: 2, borderRadius: 4, cursor: "not-allowed",
+                      background: C.gold+"0a", border: `1px solid ${C.gold}33`,
+                      color: C.muted, opacity: 0.5,
+                    }} title="Coming soon — opens parameter editor">ADJUST PARAMETERS</button>
+
+                    {txStatus && (
+                      <div style={{
+                        padding: "10px 12px", borderRadius: 4, fontFamily: MONO, fontSize: 11,
+                        background: txStatus.startsWith("✓") ? C.safe+"14" : C.danger+"14",
+                        border: `1px solid ${txStatus.startsWith("✓") ? C.safe : C.danger}44`,
+                        color: txStatus.startsWith("✓") ? C.safe : C.danger,
+                      }}>{txStatus}</div>
+                    )}
+
+                    <div style={{ marginTop: 8, padding: "12px 14px", background: C.bg, border: `1px solid ${C.border}`, borderRadius: 4 }}>
+                      <div style={{ fontFamily: MONO, fontSize: 9, color: C.muted, letterSpacing: 2, marginBottom: 8 }}>POLICY METADATA</div>
+                      {[
+                        ["Admin",       fmt.addr(policyState.admin)],
+                        ["Created",     fmtTs(String(policyState.created_at))],
+                        ["Last Action", fmtTs(String(policyState.last_action_at))],
+                      ].map(([k, v]) => (
+                        <div key={k} style={{ display: "flex", justifyContent: "space-between", marginBottom: 5 }}>
+                          <span style={{ fontFamily: SANS, fontSize: 11, color: C.muted }}>{k}</span>
+                          <span style={{ fontFamily: MONO, fontSize: 11, color: C.text }}>{v}</span>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                </Card>
+              </div>
+            </div>
+          )
+        })()}
 
         {/* POSITIONS TAB */}
         {tab === "positions" && (

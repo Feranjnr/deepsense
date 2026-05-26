@@ -57,6 +57,72 @@ declare module "@mysten/dapp-kit" {
 // @mysten/sui subpath stubs
 declare module "@mysten/sui/jsonRpc" {
   export function getJsonRpcFullnodeUrl(network: string): string
+
+  export interface SuiJsonRpcClientOptions {
+    url: string
+    network: string
+  }
+
+  export interface SuiObjectResponse {
+    data?: {
+      content?: {
+        dataType: string
+        fields: Record<string, unknown>
+        type?: string
+      } | null
+    } | null
+  }
+
+  export interface SuiEventId {
+    txDigest: string
+    eventSeq: string
+  }
+
+  export interface SuiEvent {
+    id: SuiEventId
+    type: string
+    parsedJson: unknown
+    timestampMs?: string | null
+    packageId: string
+    transactionModule: string
+    sender: string
+  }
+
+  export interface PaginatedEvents {
+    data: SuiEvent[]
+    nextCursor?: SuiEventId | null
+    hasNextPage: boolean
+  }
+
+  export class SuiJsonRpcClient {
+    constructor(options: SuiJsonRpcClientOptions)
+    getObject(params: {
+      id: string
+      options?: { showContent?: boolean; showType?: boolean } | null
+    }): Promise<SuiObjectResponse>
+    queryEvents(params: {
+      query: { MoveModule?: { package: string; module: string }; MoveEventType?: string }
+      cursor?: SuiEventId | null
+      limit?: number | null
+      order?: "ascending" | "descending" | null
+    }): Promise<PaginatedEvents>
+  }
+}
+
+declare module "@mysten/sui/transactions" {
+  export class Transaction {
+    moveCall(params: {
+      target: string
+      arguments?: any[]
+      typeArguments?: string[]
+    }): any
+    object(id: string): any
+    get pure(): {
+      u64(val: number): any
+      address(addr: string): any
+      bool(val: boolean): any
+    }
+  }
 }
 
 declare module "@mysten/sui/client" {
