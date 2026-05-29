@@ -30,6 +30,7 @@ export type ActionLogEntry = {
 
 type UseRiskEngineParams = {
   prices: PriceMap | null;
+  pythPrices?: Record<string, { usd: number; conf?: number }> | null;
   policyState: PolicyState | null;
   enabled: boolean;
   walletConnected: boolean;
@@ -149,6 +150,7 @@ function calculateRiskScore(
 
 export function useRiskEngine({
   prices,
+  pythPrices,
   policyState,
   enabled,
   walletConnected,
@@ -160,20 +162,32 @@ export function useRiskEngine({
   const priceHistory     = useRef<PriceSnapshot[]>([]);
   const lastOnChainScore = useRef<number>(-1);
 
-  // Stable serialised key — only changes when price values actually change,
-  // not on every render where the parent recreates the object reference.
-  const pricesKey = JSON.stringify(prices);
+  // Merge CoinGecko + Pyth: Pyth wins where available.
+  const mergedPrices: PriceMap | null = (() => {
+    if (!prices && !pythPrices) return null;
+    const base: PriceMap = prices ? { ...prices } : {};
+    if (pythPrices) {
+      for (const [key, val] of Object.entries(pythPrices)) {
+        // Preserve existing chg from CoinGecko; override usd with Pyth price.
+        base[key] = { usd: val.usd, chg: base[key]?.chg ?? 0 };
+      }
+    }
+    return base;
+  })();
+
+  // Stable dep key — only changes when merged values change.
+  const pricesKey = JSON.stringify(mergedPrices);
 
   useEffect(() => {
-    if (!enabled || !prices) return;
+    if (!enabled || !mergedPrices) return;
 
     // Push snapshot (cap at 10)
     priceHistory.current = [
       ...priceHistory.current,
-      { prices, ts: Date.now() },
+      { prices: mergedPrices, ts: Date.now() },
     ].slice(-10);
 
-    const { score, level, reasons } = calculateRiskScore(prices, priceHistory.current);
+    const { score, level, reasons } = calculateRiskScore(mergedPrices, priceHistory.current);
 
     // Only update state when score actually changes to avoid unnecessary renders.
     setRiskAssessment((prev) => {

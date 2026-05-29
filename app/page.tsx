@@ -6,6 +6,7 @@ import { useCurrentAccount, useSuiClient, useSignAndExecuteTransaction } from "@
 import { Transaction } from "@mysten/sui/transactions"
 import { useRiskGuardian } from "@/app/hooks/useRiskGuardian"
 import { useRiskEngine } from "@/app/hooks/useRiskEngine"
+import { usePythPrices } from "@/app/hooks/usePythPrices"
 import { RISK_GUARDIAN } from "@/app/config/contracts"
 
 // ─── DESIGN TOKENS ─────────────────────────────────────────────────────────────
@@ -60,20 +61,18 @@ function canonicalCoinType(coinType: string): string {
   return COIN_DEFS[coinType] ? coinType : coinType
 }
 
-// ─── MOCK DATA (pre-wallet-connect fallback; replaced by live data when connected) ─
-const MOCK_POOLS = [
-  { id: "pool_sui_usdc",  base: "SUI",  quote: "USDC", price: 2.47,  change: -3.2,  volume: 4_820_000,  spread: 0.02, liquidity: 12_400_000 }
-,
-  { id: "pool_eth_usdc",  base: "ETH",  quote: "USDC", price: 3821,   change: +1.8,  volume: 9_100_000,  spread: 0.04, liquidity: 28_700_000 },
-  { id: "pool_btc_usdc",  base: "BTC",  quote: "USDC", price: 67400,  change: +0.6,  volume: 6_300_000,  spread: 0.03, liquidity: 41_200_000 },
-  { id: "pool_sui_eth",   base: "SUI",  quote: "ETH",  price: 0.00065,change: -1.1, volume: 1_200_000,  spread: 0.05, liquidity: 5_600_000 },
-
-  { id: "pool_usdt_usdc", base: "USDT", quote: "USDC", price: 0.9998, change: 0.0,   volume: 22_000_000, spread: 0.001,liquidity: 80_000_000 },
+// ─── POOL TEMPLATES ────────────────────────────────────────────────────────────
+// Prices come from CoinGecko/Pyth. Volume & liquidity require DeepBook API — not available yet.
+const POOL_TEMPLATES: { id: string; base: string; quote: string; spread: number }[] = [
+  { id: "pool_sui_usdc",  base: "SUI",  quote: "USDC", spread: 0.02  },
+  { id: "pool_sui_eth",   base: "SUI",  quote: "ETH",  spread: 0.05  },
+  { id: "pool_eth_usdc",  base: "ETH",  quote: "USDC", spread: 0.04  },
+  { id: "pool_btc_usdc",  base: "BTC",  quote: "USDC", spread: 0.03  },
+  { id: "pool_usdt_usdc", base: "USDT", quote: "USDC", spread: 0.001 },
 ]
 
 // ─── LIVE PRICE HOOK ───────────────────────────────────────────────────────────
 // Fetches SUI, ETH, BTC, USDT, USDC from CoinGecko every 30 s.
-// Falls back silently to MOCK_POOLS on any network error.
 
 function useCoinGeckoPrices(refetchMs = 30_000): { pools: any[]; loading: boolean; prices: Record<string, { usd: number; chg: number }> | null } {
   const [prices, setPrices] = useState<Record<string, { usd: number; chg: number }> | null>(null)
@@ -89,7 +88,7 @@ function useCoinGeckoPrices(refetchMs = 30_000): { pools: any[]; loading: boolea
           { signal: undefined }
         )
         if (!resp.ok) throw new Error("coingecko " + resp.status)
-        const data = (await resp.json()) as any // CoinGeckoResponse
+        const data = (await resp.json()) as any
         if (cancelled) return
         const map: Record<string, { usd: number; chg: number }> = {}
         for (const [k, v] of Object.entries(data)) map[k] = { usd: (v as any).usd, chg: (v as any).usd_24h_change }
@@ -104,78 +103,46 @@ function useCoinGeckoPrices(refetchMs = 30_000): { pools: any[]; loading: boolea
     return () => { cancelled = true; clearInterval(id) }
   }, [refetchMs])
 
-  if (loading || !prices) return { pools: MOCK_POOLS, loading, prices: null }
+  if (loading || !prices) return { pools: [], loading, prices: null }
 
   const derived: any[] = []
   if (prices.sui && prices["usd-coin"]) {
-    derived.push({
-      id: "pool_sui_usdc", base: "SUI", quote: "USDC",
-      price: prices.sui.usd, change: prices.sui.chg,
-      volume: MOCK_POOLS[0].volume, spread: 0.02, liquidity: MOCK_POOLS[0].liquidity,
-    })
+    derived.push({ id: "pool_sui_usdc", base: "SUI", quote: "USDC", price: prices.sui.usd, change: prices.sui.chg, spread: 0.02 })
   }
   if (prices.sui && prices.ethereum) {
-    derived.push({
-      id: "pool_sui_eth", base: "SUI", quote: "ETH",
-      price: prices.sui.usd / prices.ethereum.usd, change: prices.sui.chg - prices.ethereum.chg,
-      volume: MOCK_POOLS[3].volume, spread: 0.05, liquidity: MOCK_POOLS[3].liquidity,
-    })
+    derived.push({ id: "pool_sui_eth", base: "SUI", quote: "ETH", price: prices.sui.usd / prices.ethereum.usd, change: prices.sui.chg - prices.ethereum.chg, spread: 0.05 })
   }
   if (prices.ethereum && prices["usd-coin"]) {
-    derived.push({
-      id: "pool_eth_usdc", base: "ETH", quote: "USDC",
-      price: prices.ethereum.usd, change: prices.ethereum.chg,
-      volume: MOCK_POOLS[1].volume, spread: 0.04, liquidity: MOCK_POOLS[1].liquidity,
-    })
+    derived.push({ id: "pool_eth_usdc", base: "ETH", quote: "USDC", price: prices.ethereum.usd, change: prices.ethereum.chg, spread: 0.04 })
   }
   if (prices.bitcoin && prices["usd-coin"]) {
-    derived.push({
-      id: "pool_btc_usdc", base: "BTC", quote: "USDC",
-      price: prices.bitcoin.usd, change: prices.bitcoin.chg,
-      volume: MOCK_POOLS[2].volume, spread: 0.03, liquidity: MOCK_POOLS[2].liquidity,
-    })
+    derived.push({ id: "pool_btc_usdc", base: "BTC", quote: "USDC", price: prices.bitcoin.usd, change: prices.bitcoin.chg, spread: 0.03 })
   }
   if (prices.tether && prices["usd-coin"]) {
-    derived.push({
-      id: "pool_usdt_usdc", base: "USDT", quote: "USDC",
-      price: prices.tether.usd / prices["usd-coin"].usd, change: prices.tether.chg - prices["usd-coin"].chg,
-      volume: MOCK_POOLS[4].volume, spread: 0.001, liquidity: MOCK_POOLS[4].liquidity,
-    })
+    derived.push({ id: "pool_usdt_usdc", base: "USDT", quote: "USDC", price: prices.tether.usd / prices["usd-coin"].usd, change: prices.tether.chg - prices["usd-coin"].chg, spread: 0.001 })
   }
 
-  return { pools: derived.length === 5 ? derived : MOCK_POOLS, loading, prices }
+  return { pools: derived, loading, prices }
 }
 
-// Mock positions used when no wallet is connected (demo mode)
-const MOCK_POSITIONS = [
-  { id: "p1", protocol: "Navi Protocol",   type: "LONG",  asset: "SUI",    size: 5000,  collateral: 2200, leverage: 3,   entryPrice: 2.61,  liquidationPrice: 1.94, health: 68, pnl: -700,  pnlPct: -13.2, pool: "pool_sui_usdc"  },
-  { id: "p2", protocol: "Scallop Lend",    type: "LEND",  asset: "USDC",   size: 8000,  collateral: 8000, leverage: 1,   entryPrice: 1.00,  liquidationPrice: null,  health: 100,pnl:  320,  pnlPct: +4.0,  pool: "pool_usdt_usdc" },
-  { id: "p3", protocol: "Cetus DEX",       type: "LP",    asset: "SUI/USDC",size: 3200, collateral: 3200, leverage: 1,  entryPrice: 2.55,  liquidationPrice: null,  health: 92, pnl:  -160, pnlPct: -4.8,  pool: "pool_sui_usdc"  },
-  { id: "p4", protocol: "DeepBook",        type: "SHORT", asset: "ETH",    size: 2000,  collateral:  900, leverage: 2.2, entryPrice: 3750,  liquidationPrice: 4125,  health: 44, pnl:  142,  pnlPct: +7.1,  pool: "pool_eth_usdc"  },
-]
-
-const MOCK_RISK_EVENTS = [
-  { time: "14:32:01", event: "Liquidation Warning",    position: "SUI LONG 3x",   severity: "HIGH",   detail: "18% from liquidation" },
-  { time: "14:28:44", event: "Funding Rate Spike",     position: "ETH SHORT 2x",  severity: "MEDIUM", detail: "Rate +0.14% / 8h"   },
-  { time: "14:21:13", event: "Oracle Deviation",       position: "SUI/USDC LP",   severity: "LOW",    detail: "DeepBook vs Pyth: 0.3%" },
-  { time: "14:15:07", event: "Correlated Exposure",    position: "All Positions", severity: "MEDIUM", detail: "78% SUI correlation"  },
-  { time: "14:02:55", event: "Volume Anomaly",         position: "pool_sui_usdc", severity: "LOW",    detail: "3.2x avg 1hr volume"  },
-]
-
-const MOCK_BIDS = [
-  { price: 2.468, size: 12400, total: 30603 },
-  { price: 2.465, size:  8900, total: 18203 },
-  { price: 2.462, size: 15600, total:  9303 },
-  { price: 2.459, size:  5200, total: 12775 },
-  { price: 2.456, size:  7575, total:  7575 },
-]
-const MOCK_ASKS = [
-  { price: 2.470, size:  9800, total:  9800 },
-  { price: 2.473, size:  6200, total: 16000 },
-  { price: 2.476, size: 11400, total: 27400 },
-  { price: 2.479, size:  8300, total: 35700 },
-  { price: 2.482, size:  5100, total: 40800 },
-]
+// Deterministic simulated orderbook — generated from mid-price for visualization only.
+// Clearly labeled "Simulated" in the UI. Live DeepBook integration coming soon.
+function simulatedBook(mid: number, levels = 5) {
+  const step = mid * 0.0015
+  const sizes = [12400, 8900, 15600, 5200, 7575]
+  let bidRunning = 0, askRunning = 0
+  const bids = Array.from({ length: levels }, (_, i) => {
+    const size = sizes[i]
+    bidRunning += size
+    return { price: mid - (i + 1) * step, size, total: bidRunning }
+  }).reverse()
+  const asks = Array.from({ length: levels }, (_, i) => {
+    const size = sizes[4 - i]
+    askRunning += size
+    return { price: mid + (i + 1) * step, size, total: askRunning }
+  })
+  return { bids, asks }
+}
 
 // ─── UI PRIMITIVES ─────────────────────────────────────────────────────────────
 function Glow({ children, color = C.accent, size = 13, weight = 600, mono = true, style }: any) {
@@ -278,17 +245,37 @@ function LiveTicker({ pools }: { pools: any[] }) {
 }
 
 // ─── PORTFOLIO OVERVIEW ────────────────────────────────────────────────────────
-function PortfolioOverview({ positions, network, isLive }: any) {
-  const totalValue = positions.reduce((s: number, p: any) => s + p.size, 0)
-  const totalPnl   = positions.reduce((s: number, p: any) => s + p.pnl,   0)
-  const avgHealth  = Math.round(positions.reduce((s: number, p: any) => s + p.health, 0) / positions.length)
-  const atRisk     = positions.filter((p: any) => p.health < 60).length
-  const net = NET[network as keyof typeof NET]
+function PortfolioOverview({ positions, walletConnected }: any) {
+  const hasPositions = walletConnected && positions.length > 0
+  const totalValue = hasPositions ? positions.reduce((s: number, p: any) => s + p.size, 0) : 0
+  const totalPnl   = hasPositions ? positions.reduce((s: number, p: any) => s + p.pnl,   0) : 0
+  const avgHealth  = hasPositions ? Math.round(positions.reduce((s: number, p: any) => s + p.health, 0) / positions.length) : 0
+  const atRisk     = hasPositions ? positions.filter((p: any) => p.health < 60).length : 0
   const stats = [
-    { label: isLive ? "PORTFOLIO VALUE" : "PORTFOLIO VALUE (Demo)", value: fmt.usd(totalValue), color: C.text,   sub: `${positions.length} positions` },
-    { label: "TOTAL PNL",        value: fmt.usd(Math.abs(totalPnl)), color: totalPnl >= 0 ? C.safe : C.danger, sub: totalPnl >= 0 ? "▲ Profitable" : "▼ In loss" },
-    { label: "AVG HEALTH",       value: `${avgHealth}%`,               color: healthColor(avgHealth),        sub: "Across all positions" },
-    { label: "AT RISK",          value: `${atRisk} pos`,               color: atRisk > 0 ? C.danger : C.safe, sub: "Health < 60%" },
+    {
+      label: "PORTFOLIO VALUE",
+      value: hasPositions ? fmt.usd(totalValue) : "$0.00",
+      color: C.text,
+      sub: hasPositions ? `${positions.length} positions` : "Connect wallet to load",
+    },
+    {
+      label: "TOTAL PNL",
+      value: hasPositions ? fmt.usd(Math.abs(totalPnl)) : "$0.00",
+      color: hasPositions ? (totalPnl >= 0 ? C.safe : C.danger) : C.muted,
+      sub: hasPositions ? (totalPnl >= 0 ? "▲ Profitable" : "▼ In loss") : "—",
+    },
+    {
+      label: "AVG HEALTH",
+      value: hasPositions ? `${avgHealth}%` : "—",
+      color: hasPositions ? healthColor(avgHealth) : C.muted,
+      sub: hasPositions ? "Across all positions" : "—",
+    },
+    {
+      label: "AT RISK",
+      value: hasPositions ? `${atRisk} pos` : "0 pos",
+      color: hasPositions && atRisk > 0 ? C.danger : C.muted,
+      sub: "Health < 60%",
+    },
   ]
   return (
     <div style={{ display: "grid", gridTemplateColumns: "repeat(4,1fr)", gap: 10, marginBottom: 16 }}>
@@ -304,35 +291,41 @@ function PortfolioOverview({ positions, network, isLive }: any) {
 }
 
 // ─── POSITION TABLE ────────────────────────────────────────────────────────────
-function PositionTable({ positions, onSelect, selected, isLive }: any) {
+function PositionTable({ positions, onSelect, selected, walletConnected }: any) {
   return (
     <Card style={{ marginBottom: 16 }}>
       <div style={{ padding: "14px 16px", borderBottom: `1px solid ${C.border}` }}>
         <SectionHeader title="OPEN POSITIONS" sub={
-          isLive
+          walletConnected
             ? "Live on-chain data · Sui Mainnet"
-            : "Demo data · Connect wallet for live positions"
+            : "Connect wallet to view positions"
         } />
       </div>
-      <div style={{ overflowX: "auto" }}>
-        <table style={{ width: "100%", borderCollapse: "collapse" }}>
-          <thead>
-            <tr style={{ borderBottom: `1px solid ${C.border}` }}>
-              {["PROTOCOL","TYPE","ASSET","SIZE","LEVERAGE","HEALTH","PNL",""].map(h => (
-                <th key={h} style={{
-                  fontFamily: MONO, fontSize: 9, color: C.muted, letterSpacing: 2,
-                  padding: "8px 14px", textAlign: "left", fontWeight: 400,
-                }}>{h}</th>
-              ))}
-            </tr>
-          </thead>
-          <tbody>
-            {positions.map((p: any) => {
-              const pool = MOCK_POOLS.find((d: any) => d.id === p.pool) || MOCK_POOLS[0]
-              const liqPrice = p.liquidationPrice
-                ? `$${p.liquidationPrice.toLocaleString()}`
-                : `~${fmt.usd(pool.price * (p.type === "LONG" ? 0.85 : 1.15))}`
-              return (
+      {!walletConnected ? (
+        <div style={{ padding: 32, textAlign: "center" }}>
+          <div style={{ fontFamily: MONO, fontSize: 13, color: C.muted, marginBottom: 8 }}>No wallet connected</div>
+          <div style={{ fontFamily: SANS, fontSize: 12, color: C.muted }}>Connect a Sui wallet to load your on-chain positions.</div>
+        </div>
+      ) : positions.length === 0 ? (
+        <div style={{ padding: 32, textAlign: "center" }}>
+          <div style={{ fontFamily: MONO, fontSize: 13, color: C.muted, marginBottom: 8 }}>No positions found</div>
+          <div style={{ fontFamily: SANS, fontSize: 12, color: C.muted }}>No coin balances detected on this address.</div>
+        </div>
+      ) : (
+        <div style={{ overflowX: "auto" }}>
+          <table style={{ width: "100%", borderCollapse: "collapse" }}>
+            <thead>
+              <tr style={{ borderBottom: `1px solid ${C.border}` }}>
+                {["PROTOCOL","TYPE","ASSET","SIZE","LEVERAGE","HEALTH","PNL",""].map(h => (
+                  <th key={h} style={{
+                    fontFamily: MONO, fontSize: 9, color: C.muted, letterSpacing: 2,
+                    padding: "8px 14px", textAlign: "left", fontWeight: 400,
+                  }}>{h}</th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              {positions.map((p: any) => (
                 <tr key={p.id} onClick={() => onSelect(p)}
                   style={{
                     borderBottom: `1px solid ${C.border}`, cursor: "pointer",
@@ -371,69 +364,62 @@ function PositionTable({ positions, onSelect, selected, isLive }: any) {
                     }}>ANALYZE →</button>
                   </td>
                 </tr>
-              )
-            })}
-          </tbody>
-        </table>
-      </div>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
     </Card>
   )
 }
 
 // ─── DEEPBOOK ORDERBOOK ─────────────────────────────────────────────────────────
-function DeepBookPanel({ pools, selectedPool }: any) {
-  const pool = selectedPool || MOCK_POOLS[0]
-  const BIDS  = pool.bids  || MOCK_BIDS
-  const ASKS  = pool.asks  || MOCK_ASKS
+function DeepBookPanel({ selectedPool }: any) {
+  if (!selectedPool) {
+    return (
+      <Card>
+        <div style={{ padding: "14px 16px", borderBottom: `1px solid ${C.border}` }}>
+          <SectionHeader title="DEEPBOOK ORDERBOOK" sub="Waiting for price data…" />
+        </div>
+        <div style={{ padding: 32, textAlign: "center", fontFamily: MONO, fontSize: 12, color: C.muted, animation: "pulse 1.2s infinite" }}>
+          Loading live prices…
+        </div>
+      </Card>
+    )
+  }
+  const { bids: BIDS, asks: ASKS } = simulatedBook(selectedPool.price)
   const maxBid = Math.max(...BIDS.map((b: any) => b.total))
   const maxAsk = Math.max(...ASKS.map((a: any) => a.total))
-  const spread  = pool.asks?.[0] && pool.bids?.[0]
-    ? (pool.asks[0].price - pool.bids[0].price).toFixed(4)
-    : "0.0400"
-  const spreadPct = pool.asks?.[0] && pool.bids?.[0] && pool.asks[0].price > 0
-    ? ((pool.asks[0].price - pool.bids[0].price) / pool.asks[0].price * 100).toFixed(3)
-    : "0.160"
+  const priceDecimals = selectedPool.price < 0.01 ? 6 : selectedPool.price < 1 ? 4 : selectedPool.price < 100 ? 3 : 2
   return (
     <Card>
       <div style={{ padding: "14px 16px", borderBottom: `1px solid ${C.border}` }}>
-        <SectionHeader title="DEEPBOOK ORDERBOOK" sub={`${pool.base}/${pool.quote} · CLOB · Simulated orderbook`} />
-        <div style={{ display: "flex", gap: 16 }}>
-          {[
-            ["24H VOL", pool.volume ? fmt.usd(pool.volume) : "—"],
-            ["LIQUIDITY", pool.liquidity ? fmt.usd(pool.liquidity) : "—"],
-            ["SPREAD", `${pool.spread ?? spread}% (${spreadPct}%)`],
-          ].map(([k, v]: any) => (
-            <div key={k}>
-              <div style={{ fontFamily: MONO, fontSize: 9, color: C.muted, letterSpacing: 2 }}>{k}</div>
-              <div style={{ fontFamily: MONO, fontSize: 12, color: C.text }}>{v}</div>
-            </div>
-          ))}
+        <SectionHeader
+          title="DEEPBOOK ORDERBOOK"
+          sub={`${selectedPool.base}/${selectedPool.quote} · CLOB · Simulated orderbook visualization`}
+        />
+        <div style={{ display: "flex", gap: 16, alignItems: "center" }}>
+          <div>
+            <div style={{ fontFamily: MONO, fontSize: 9, color: C.muted, letterSpacing: 2 }}>SPREAD</div>
+            <div style={{ fontFamily: MONO, fontSize: 12, color: C.text }}>{selectedPool.spread}%</div>
+          </div>
+          <div style={{
+            fontFamily: SANS, fontSize: 10, color: C.muted, padding: "3px 8px",
+            border: `1px solid ${C.border}`, borderRadius: 2, background: C.bg,
+          }}>Live DeepBook API integration coming soon</div>
         </div>
       </div>
       <div style={{ padding: 16 }}>
-        {["PRICE","SIZE","TOTAL"].map(h => (
-          <div key={h} style={{
-            display: "grid", gridTemplateColumns: "1fr 1fr 1fr", marginBottom: 2,
-          }}>
-            {["PRICE","SIZE","TOTAL"].map((v, j) => (
-              <div key={j} style={{
-                fontFamily: MONO, fontSize: 9, color: C.muted, letterSpacing: 2,
-                textAlign: "right", paddingRight: 8,
-              }}>{v}</div>
-            ))}
-          </div>
-        ))}
+        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", marginBottom: 2 }}>
+          {["PRICE","SIZE","TOTAL"].map((v, j) => (
+            <div key={j} style={{ fontFamily: MONO, fontSize: 9, color: C.muted, letterSpacing: 2, textAlign: "right", paddingRight: 8 }}>{v}</div>
+          ))}
+        </div>
         {ASKS.slice().reverse().map((a: any, i: number) => (
           <div key={i} style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", position: "relative", marginBottom: 2 }}>
-            <div style={{
-              position: "absolute", right: 0, top: 0, bottom: 0,
-              width: `${(a.total / maxAsk) * 100}%`, background: C.danger+"12", borderRadius: 2,
-            }} />
-            {[a.price.toFixed(3), fmt.num(a.size), fmt.num(a.total)].map((v: string | number, j: number) => (
-              <div key={j} style={{
-                fontFamily: MONO, fontSize: 11, color: j === 0 ? C.danger : C.text,
-                textAlign: "right", padding: "2px 8px", position: "relative", zIndex: 1,
-              }}>{v}</div>
+            <div style={{ position: "absolute", right: 0, top: 0, bottom: 0, width: `${(a.total / maxAsk) * 100}%`, background: C.danger+"12", borderRadius: 2 }} />
+            {[a.price.toFixed(priceDecimals), fmt.num(a.size), fmt.num(a.total)].map((v: string | number, j: number) => (
+              <div key={j} style={{ fontFamily: MONO, fontSize: 11, color: j === 0 ? C.danger : C.text, textAlign: "right", padding: "2px 8px", position: "relative", zIndex: 1 }}>{v}</div>
             ))}
           </div>
         ))}
@@ -441,20 +427,14 @@ function DeepBookPanel({ pools, selectedPool }: any) {
           borderTop: `1px solid ${C.border}`, borderBottom: `1px solid ${C.border}`,
           padding: "6px 8px", margin: "4px 0", display: "flex", justifyContent: "space-between", alignItems: "center",
         }}>
-          <Glow size={16} color={C.accent} weight={700}>{fmt.usd(pool.price ?? 2.47)}</Glow>
-          <Tag color={pool.change >= 0 ? C.safe : C.danger}>{(pool.change ?? -0.3) >= 0 ? "+" : ""}{pool.change ?? -0.3}%</Tag>
+          <Glow size={16} color={C.accent} weight={700}>{fmt.usd(selectedPool.price)}</Glow>
+          <Tag color={selectedPool.change >= 0 ? C.safe : C.danger}>{selectedPool.change >= 0 ? "+" : ""}{selectedPool.change.toFixed(2)}%</Tag>
         </div>
         {BIDS.map((b: any, i: number) => (
           <div key={i} style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", position: "relative", marginBottom: 2 }}>
-            <div style={{
-              position: "absolute", right: 0, top: 0, bottom: 0,
-              width: `${(b.total / maxBid) * 100}%`, background: C.safe+"12", borderRadius: 2,
-            }} />
-            {[b.price.toFixed(3), fmt.num(b.size), fmt.num(b.total)].map((v: string | number, j: number) => (
-              <div key={j} style={{
-                fontFamily: MONO, fontSize: 11, color: j === 0 ? C.safe : C.text,
-                textAlign: "right", padding: "2px 8px", position: "relative", zIndex: 1,
-              }}>{v}</div>
+            <div style={{ position: "absolute", right: 0, top: 0, bottom: 0, width: `${(b.total / maxBid) * 100}%`, background: C.safe+"12", borderRadius: 2 }} />
+            {[b.price.toFixed(priceDecimals), fmt.num(b.size), fmt.num(b.total)].map((v: string | number, j: number) => (
+              <div key={j} style={{ fontFamily: MONO, fontSize: 11, color: j === 0 ? C.safe : C.text, textAlign: "right", padding: "2px 8px", position: "relative", zIndex: 1 }}>{v}</div>
             ))}
           </div>
         ))}
@@ -464,32 +444,43 @@ function DeepBookPanel({ pools, selectedPool }: any) {
 }
 
 // ─── RISK FEED ─────────────────────────────────────────────────────────────────
-function RiskFeed({ events }: { events: any[] }) {
+function RiskFeed({ events, walletConnected }: { events: any[]; walletConnected: boolean }) {
   return (
     <Card>
       <div style={{ padding: "14px 16px", borderBottom: `1px solid ${C.border}` }}>
-        <SectionHeader title="RISK EVENT FEED" sub={"AI-detected anomalies · Real-time"} />
+        <SectionHeader title="RISK EVENT FEED" sub="AI-detected anomalies · Real-time" />
       </div>
-      {events.map((e: any, i: number) => (
-        <div key={i} style={{
-          padding: "12px 16px", borderBottom: i < events.length-1 ? `1px solid ${C.border}` : "none",
-          display: "flex", gap: 12, alignItems: "flex-start",
-        }}>
-          <div style={{
-            width: 3, alignSelf: "stretch", background: sevColor(e.severity),
-            borderRadius: 2, flexShrink: 0, boxShadow: `0 0 6px ${sevColor(e.severity)}`,
-          }} />
-          <div style={{ flex: 1 }}>
-            <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 4 }}>
-              <span style={{ fontFamily: SANS, fontSize: 12, color: C.text, fontWeight: 600 }}>{e.event}</span>
-              <Tag color={sevColor(e.severity)}>{e.severity}</Tag>
-            </div>
-            <div style={{ fontFamily: MONO, fontSize: 11, color: C.mutedHi, marginBottom: 3 }}>{e.position}</div>
-            <div style={{ fontFamily: SANS, fontSize: 11, color: C.muted }}>{e.detail}</div>
-          </div>
-          <span style={{ fontFamily: MONO, fontSize: 10, color: C.muted, flexShrink: 0 }}>{e.time}</span>
+      {!walletConnected ? (
+        <div style={{ padding: "24px 16px", textAlign: "center" }}>
+          <div style={{ fontFamily: MONO, fontSize: 12, color: C.muted, marginBottom: 4 }}>Connect wallet to activate risk monitoring</div>
+          <div style={{ fontFamily: SANS, fontSize: 11, color: C.muted }}>Position-level alerts appear here once your portfolio is loaded.</div>
         </div>
-      ))}
+      ) : events.length === 0 ? (
+        <div style={{ padding: "24px 16px", textAlign: "center" }}>
+          <div style={{ fontFamily: MONO, fontSize: 12, color: C.safe }}>✓ No active risk alerts — portfolio healthy</div>
+        </div>
+      ) : (
+        events.map((e: any, i: number) => (
+          <div key={i} style={{
+            padding: "12px 16px", borderBottom: i < events.length-1 ? `1px solid ${C.border}` : "none",
+            display: "flex", gap: 12, alignItems: "flex-start",
+          }}>
+            <div style={{
+              width: 3, alignSelf: "stretch", background: sevColor(e.severity),
+              borderRadius: 2, flexShrink: 0, boxShadow: `0 0 6px ${sevColor(e.severity)}`,
+            }} />
+            <div style={{ flex: 1 }}>
+              <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 4 }}>
+                <span style={{ fontFamily: SANS, fontSize: 12, color: C.text, fontWeight: 600 }}>{e.event}</span>
+                <Tag color={sevColor(e.severity)}>{e.severity}</Tag>
+              </div>
+              <div style={{ fontFamily: MONO, fontSize: 11, color: C.mutedHi, marginBottom: 3 }}>{e.position}</div>
+              <div style={{ fontFamily: SANS, fontSize: 11, color: C.muted }}>{e.detail}</div>
+            </div>
+            <span style={{ fontFamily: MONO, fontSize: 10, color: C.muted, flexShrink: 0 }}>{e.time}</span>
+          </div>
+        ))
+      )}
     </Card>
   )
 }
@@ -504,13 +495,13 @@ function ScenarioSimulator({ positions }: any) {
     setLoading(true)
     setResult(null)
     try {
-      const  groqKey =
+      const groqKey =
         typeof window !== "undefined" && (window as any).__GROQ_KEY__
           ? (window as any).__GROQ_KEY__
           : ""
-      if (! groqKey) { setResult("Set GROQ_API_KEY in the demo panel above."); setLoading(false); return }
 
-      const prompt = `You are DeepSense, an AI risk advisor for Sui DeFi and DeepBook margin traders.
+      const prompt = positions.length > 0
+        ? `You are DeepSense, an AI risk advisor for Sui DeFi and DeepBook margin traders.
 
 A trader has these open positions:
 ${positions.map((p: any) =>
@@ -527,6 +518,18 @@ Analyze:
 5. IMMEDIATE ACTIONS — 3 specific things they should do RIGHT NOW before this happens
 
 Be precise, use numbers, be direct. Format with clear headers.`
+        : `You are DeepSense, an AI risk advisor for Sui DeFi. No portfolio is loaded (wallet not connected).
+
+Scenario: The market drops ${drop}% across all assets in the next hour.
+
+Analyze the general impact on Sui DeFi:
+1. PROTOCOL RISK — which Sui lending protocols (Navi, Scallop) face the highest liquidation cascades
+2. DEEPBOOK IMPACT — how a ${drop}% crash affects CLOB liquidity and spreads on DeepBook
+3. STABLECOIN RISK — de-peg scenarios for USDT/USDC on Sui
+4. RECOVERY STRATEGY — what positions a Sui DeFi trader should consider after a ${drop}% drop
+5. RISK MANAGEMENT — 3 protective strategies for Sui DeFi participants
+
+Be precise and educational. Format with clear headers.`
 
       const res = await fetch("/api/advisor", {
         method: "POST",
@@ -564,32 +567,32 @@ Be precise, use numbers, be direct. Format with clear headers.`
           </div>
         </div>
 
-        {/* Quick-status cards */}
-        <div style={{ display: "grid", gridTemplateColumns: "repeat(3,1fr)", gap: 8, marginBottom: 14 }}>
-          {positions.filter((p: any) => p.liquidationPrice).map((p: any) => {
-            const pools = MOCK_POOLS
-            const pool   = pools.find((d: any) => d.id === p.pool) || pools[0]
-            const crashPrice = pool.price * (1 - drop / 100)
-            const liq = p.liquidationPrice as number
-            const willLiq = p.type === "LONG" ? crashPrice < liq : crashPrice > liq
-            return (
-              <div key={p.id} style={{
-                padding: "10px 12px",
-                background: willLiq ? C.danger+"11" : C.safe+"08",
-                border: `1px solid ${willLiq ? C.danger+"44" : C.border}`,
-                borderRadius: 4,
-              }}>
-                <div style={{ fontFamily: MONO, fontSize: 10, color: C.mutedHi, marginBottom: 4 }}>{p.asset}</div>
-                <div style={{ fontFamily: SANS, fontSize: 11, color: willLiq ? C.danger : C.safe, fontWeight: 600 }}>
-                  {willLiq ? "⚠ LIQUIDATED" : "✓ SURVIVES"}
-                </div>
+        {/* Quick-status cards — only for positions with a liquidation price */}
+        {positions.filter((p: any) => p.liquidationPrice && p.entryPrice).length > 0 && (
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(3,1fr)", gap: 8, marginBottom: 14 }}>
+            {positions.filter((p: any) => p.liquidationPrice && p.entryPrice).map((p: any) => {
+              const crashPrice = (p.entryPrice as number) * (1 - drop / 100)
+              const liq = p.liquidationPrice as number
+              const willLiq = p.type === "LONG" ? crashPrice < liq : crashPrice > liq
+              return (
+                <div key={p.id} style={{
+                  padding: "10px 12px",
+                  background: willLiq ? C.danger+"11" : C.safe+"08",
+                  border: `1px solid ${willLiq ? C.danger+"44" : C.border}`,
+                  borderRadius: 4,
+                }}>
+                  <div style={{ fontFamily: MONO, fontSize: 10, color: C.mutedHi, marginBottom: 4 }}>{p.asset}</div>
+                  <div style={{ fontFamily: SANS, fontSize: 11, color: willLiq ? C.danger : C.safe, fontWeight: 600 }}>
+                    {willLiq ? "⚠ LIQUIDATED" : "✓ SURVIVES"}
+                  </div>
                   <div style={{ fontFamily: MONO, fontSize: 10, color: C.muted, marginTop: 3 }}>
                     Crash: ~{fmt.usd(Number(crashPrice.toFixed(4)))} / Liq: {Number(liq).toLocaleString()}
                   </div>
-              </div>
-            )
-          })}
-        </div>
+                </div>
+              )
+            })}
+          </div>
+        )}
 
         <button onClick={simulate} disabled={loading} style={{
           width: "100%", padding: "11px",
@@ -618,8 +621,12 @@ Be precise, use numbers, be direct. Format with clear headers.`
 
 // ─── AI ADVISOR CHAT ────────────────────────────────────────────────────────────
 function AIAdvisor({ positions, pools, groqKey }: any) {
+  const hasPositions = positions.length > 0
   const [messages, setMessages] = useState<{role:"assistant"|"user";text:string}[]>([
-    { role: "assistant", text: "Hello. I'm DeepSense — your AI risk advisor for Sui DeFi. I have full visibility into your positions across Navi, Scallop, Cetus, and DeepBook. Ask me anything about your portfolio, risk exposure, or market conditions." }
+    { role: "assistant", text: hasPositions
+        ? "Hello. I'm DeepSense — your AI risk advisor for Sui DeFi. I have visibility into your on-chain positions. Ask me anything about your portfolio, risk exposure, or market conditions."
+        : "Hello. I'm DeepSense — your AI risk advisor for Sui DeFi. No wallet is connected yet, so I'll provide general DeFi and Sui risk advice. Connect your wallet for personalized portfolio analysis."
+    }
   ])
   const [input, setInput] = useState("")
   const [loading, setLoading] = useState(false)
@@ -642,19 +649,24 @@ function AIAdvisor({ positions, pools, groqKey }: any) {
     setMessages(m => [...m, { role: "user", text: q }])
     setLoading(true)
 
+    const hasPositions = positions.length > 0
     const context = `You are DeepSense, an elite AI DeFi risk advisor for the Sui blockchain and DeepBook CLOB.
 
-Current portfolio:
-${positions.map((p: any) =>
-  `- ${p.type} ${p.asset} on ${p.protocol}: $${p.size} size, ${p.leverage}x leverage, Health ${p.health}%, PnL $${p.pnl} (${p.pnlPct}%), Liquidation: $${p.liquidationPrice ?? "none"}`
-).join("\n")}
+${hasPositions
+  ? `Current portfolio:\n${positions.map((p: any) =>
+      `- ${p.type} ${p.asset} on ${p.protocol}: $${p.size} size, ${p.leverage}x leverage, Health ${p.health}%, PnL $${p.pnl} (${p.pnlPct}%), Liquidation: $${p.liquidationPrice ?? "none"}`
+    ).join("\n")}`
+  : "No wallet connected — user has not loaded a portfolio. Provide general Sui DeFi risk advice."
+}
 
-DeepBook pools active:
-${pools.map((p: any) =>
-  `- ${p.base}/${p.quote}: $${fmt.usd(p.price)} (${fmt.pct(p.change)}), Vol ${fmt.usd(p.volume)}, Spread ${p.spread}%`
-).join("\n")}
+${pools.length > 0
+  ? `DeepBook pools (live prices, simulated depth):\n${pools.map((p: any) =>
+      `- ${p.base}/${p.quote}: ${fmt.usd(p.price)} (${fmt.pct(p.change)}), Spread ${p.spread}%`
+    ).join("\n")}`
+  : "Market price data loading."
+}
 
-Be conversational but precise. Use specific numbers from the portfolio. Keep responses under 200 words. Give actionable advice. You understand Sui's object model, Move contracts, and DeepBook's CLOB mechanics.`
+Be conversational but precise. ${hasPositions ? "Use specific numbers from the portfolio." : "Answer general DeFi and Sui questions."} Keep responses under 200 words. Give actionable advice. You understand Sui's object model, Move contracts, and DeepBook's CLOB mechanics.`
 
     try {
       const res = await fetch("/api/advisor", {
@@ -666,7 +678,9 @@ Be conversational but precise. Use specific numbers from the portfolio. Keep res
         }),
       })
       const data = await res.json()
-      const reply: string = data.reply || "Unable to respond."
+      const reply: string = res.status === 401
+        ? "API key not configured. Set GROQ_API_KEY in .env.local or provide a key via the session store."
+        : (data.reply || "Unable to respond.")
       setMessages(m => [...m, { role: "assistant", text: reply }])
     } catch {
       setMessages(m => [...m, { role: "assistant", text: "Connection error. Please retry." }])
@@ -773,7 +787,7 @@ function TradingPanel({ pool, network }: any) {
   return (
     <Card>
       <div style={{ padding: "14px 16px", borderBottom: `1px solid ${C.border}` }}>
-        <SectionHeader title="DEEPBOOK TRADING" sub={`${pool.base}/${pool.quote} · ${network.toUpperCase()} ${pool.live ? "· Live" : "· Demo"}`} />
+        <SectionHeader title="DEEPBOOK TRADING" sub={`${pool.base}/${pool.quote} · ${network.toUpperCase()} · Simulated execution`} />
       </div>
       <div style={{ padding: 16 }}>
         <div style={{ display: "flex", gap: 6, marginBottom: 14 }}>
@@ -949,8 +963,8 @@ function isValidCoinType(ct: string): boolean {
 }
 
 // ─── DYNAMIC RISK EVENTS ──────────────────────────────────────────────────────
-function generateRiskEvents(positions: any[], isLive: boolean): any[] {
-  if (!isLive) return MOCK_RISK_EVENTS
+function generateRiskEvents(positions: any[]): any[] {
+  if (positions.length === 0) return []
   const now = new Date()
   const timeStr = now.toTimeString().slice(0, 8)
   const totalValue = positions.reduce((s: number, p: any) => s + p.size, 0)
@@ -977,7 +991,7 @@ function generateRiskEvents(positions: any[], isLive: boolean): any[] {
     }
   }
 
-  events.push({ time: timeStr, event: "Live Prices", position: "Market Data", severity: "LOW", detail: "CoinGecko feed active · 30s refresh" })
+  events.push({ time: timeStr, event: "Live Prices", position: "Market Data", severity: "LOW", detail: "CoinGecko + Pyth feed active · 10–30s refresh" })
   return events
 }
 
@@ -1028,24 +1042,23 @@ export default function DeepSenseClientPage() {
 
   // ── computed props passed to child components ──
   const { pools, prices }  = useCoinGeckoPrices()
+  const { pythPrices, loading: pythLoading } = usePythPrices()
   // Derive positions from raw balances + live prices — re-prices automatically on each CoinGecko refresh
-  const livePositions: RpcPosition[] = rawBalances
+  const positions: RpcPosition[] = rawBalances
     .map((b, i) => coinToPosition(b.coinType, b.rawAmt, b.decimals, b.symbol, i, prices))
     .sort((a, b) => b.size - a.size)
-  const isPositionsLive    = isWalletConnected && livePositions.length > 0
-  const positions          = isPositionsLive ? livePositions : MOCK_POSITIONS
-  console.log("[DeepSense] Wallet status:", { isWalletConnected, walletAddr, livePositionsCount: livePositions.length, isLoadingBalances })
-  const riskEvents         = generateRiskEvents(positions, isPositionsLive)
+  console.log("[DeepSense] Wallet status:", { isWalletConnected, walletAddr, livePositionsCount: positions.length, isLoadingBalances })
+  const riskEvents = generateRiskEvents(positions)
 
   const [selectedPos, setSelectedPos] = useState<any>(null)
-  const [selectedPool, setSelectedPool] = useState(MOCK_POOLS[0])
-  const [ groqKey, setApiKeyInput]     = useState("")
-  const [showKey, setShowKey]        = useState(false)
+  const [selectedPool, setSelectedPool] = useState<any>(null)
+  const [groqKey] = useState("")
 
   // ── Risk Guardian on-chain state ──
   const { policyState, events: guardianEvents, loading: guardianLoading, error: guardianError, refetch: refetchGuardian } = useRiskGuardian()
   const { riskAssessment, actionLog } = useRiskEngine({
     prices: prices ?? {},
+    pythPrices,
     policyState,
     enabled: true,
     walletConnected: isWalletConnected,
@@ -1102,12 +1115,53 @@ export default function DeepSenseClientPage() {
     } catch (e: any) { setTxMsg(`✗ ${e?.message ?? "Transaction failed"}`) }
   }
 
-  // Load persisted key on mount; keep window global in sync
+  const [showParamsForm, setShowParamsForm] = useState(false)
+  const [paramLeverage, setParamLeverage] = useState<string>("")
+  const [paramLiqThreshold, setParamLiqThreshold] = useState<string>("")
+
+  function handleAdjustParams() {
+    const lev = parseInt(paramLeverage, 10)
+    const liq = parseInt(paramLiqThreshold, 10)
+    if (isNaN(lev) || isNaN(liq) || lev <= 0 || liq <= 0) {
+      setTxMsg("✗ Enter valid positive integers for both fields")
+      return
+    }
+    try {
+      const tx = new Transaction()
+      tx.moveCall({
+        target: `${RISK_GUARDIAN.PACKAGE_ID}::${RISK_GUARDIAN.MODULE}::admin_adjust_parameters`,
+        arguments: [
+          tx.object(RISK_GUARDIAN.POLICY_ID),
+          tx.pure.u64(lev),
+          tx.pure.u64(liq),
+          tx.object(RISK_GUARDIAN.ADMIN_CAP_ID),
+          tx.object(RISK_GUARDIAN.CLOCK),
+        ],
+      })
+      signAndExecute(
+        { transaction: tx },
+        {
+          onSuccess: () => {
+            setTxMsg(`✓ Parameters updated: leverage=${lev} liq_threshold=${liq}`)
+            setShowParamsForm(false)
+            setTimeout(refetchGuardian, 2000)
+          },
+          onError: (e: any) => setTxMsg(`✗ ${e?.message ?? "Transaction failed"}`),
+        },
+      )
+    } catch (e: any) { setTxMsg(`✗ ${e?.message ?? "Transaction failed"}`) }
+  }
+
+  // Sync selectedPool when pools first become available
+  useEffect(() => {
+    if (pools.length > 0 && !selectedPool) setSelectedPool(pools[0])
+  }, [pools, selectedPool])
+
+  // Sync Groq key from sessionStorage into window global for legacy component refs
   useEffect(() => {
     const saved = sessionStorage.getItem("ds_groq_key") || ""
-    if (saved && !groqKey) setApiKeyInput(saved)
-    ;(window as any).__GROQ_KEY__ = groqKey || saved
-  }, [groqKey])
+    ;(window as any).__GROQ_KEY__ = saved
+  }, [])
 
   const net = NET[network as keyof typeof NET]
 
@@ -1172,36 +1226,7 @@ export default function DeepSenseClientPage() {
       {/* Ticker */}
       <LiveTicker pools={pools} />
 
-      {/* ─── API KEY BAR ──────────────────────────────────────────────────────── */}
-      <div style={{
-        padding: "8px 24px", background: C.surface, borderBottom: `1px solid ${C.border}`,
-        display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap",
-      }}>
-        <span style={{ fontFamily: MONO, fontSize: 9, color: C.gold, letterSpacing: 2 }}>◈ GROQ API KEY</span>
-        <span style={{ fontFamily: SANS, fontSize: 11, color: C.muted }}>
-          Required for AI Advisor &amp; Scenario Simulator. Key is stored in sessionStorage only, never sent to any server.
-        </span>
-        <div style={{ flex: 1 }} />
-        {!showKey ? (
-          <button onClick={() => setShowKey(true)} style={{
-            fontFamily: MONO, fontSize: 9, padding: "3px 9px",
-            background: C.gold+"22", border: `1px solid ${C.gold}44`, color: C.gold,
-            borderRadius: 2, cursor: "pointer", letterSpacing: 1,
-          }}>SET KEY</button>
-        ) : (
-          <input
-            type="password" value={ groqKey} onChange={e => setApiKeyInput(e.target.value)}
-            onBlur={() => { sessionStorage.setItem("ds_groq_key", groqKey); (window as any).__GROQ_KEY__ = groqKey; setShowKey(false) }}
-            placeholder="gsk_…"
-            autoFocus
-            style={{
-              width: 280, background: C.bg, border: `1px solid ${C.borderHi}`,
-              color: C.text, fontFamily: MONO, fontSize: 11, padding: "5px 10px",
-              borderRadius: 3, outline: "none",
-            }}
-          />
-        )}
-      </div>
+      {/* API key bar hidden — key read from GROQ_API_KEY env var server-side */}
 
       {/* ─── MAIN CONTENT ─────────────────────────────────────────────────────── */}
       <div style={{ padding: "20px 24px" }} key={tab}>
@@ -1209,48 +1234,74 @@ export default function DeepSenseClientPage() {
         {/* DASHBOARD TAB */}
         {tab === "dashboard" && (
           <>
-            <PortfolioOverview positions={positions} network={network} isLive={isPositionsLive} />
-            <div style={{ display: "grid", gridTemplateColumns: "1fr 340px", gap: 14 }}>
-              <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
-                <PositionTable positions={positions} onSelect={setSelectedPos} selected={selectedPos} isLive={isPositionsLive} />
-                <RiskFeed events={riskEvents} />
-              </div>
-              <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
-                <DeepBookPanel pools={pools} selectedPool={selectedPool} />
-                {!isWalletConnected && (
-                  <Card style={{ padding: 20, textAlign: "center", border: `1px solid ${C.accent}33` }}>
-                    <Glow size={13} style={{ display: "block", marginBottom: 8 }}>CONNECT YOUR WALLET</Glow>
-                    <div style={{ fontFamily: SANS, fontSize: 12, color: C.mutedHi, marginBottom: 14 }}>
-                      Connect a Sui wallet to load your real positions and get personalized risk analysis.
+            {!isWalletConnected ? (
+              /* ── Hero card when no wallet ── */
+              <Card style={{
+                padding: "48px 40px", marginBottom: 24, textAlign: "center",
+                border: `1px solid ${C.accent}33`, background: C.accent+"04",
+              }}>
+                <div style={{ marginBottom: 16 }}>
+                  <Glow size={28} weight={800} style={{ letterSpacing: 6, display: "block", marginBottom: 6 }}>DEEPSENSE</Glow>
+                  <div style={{ fontFamily: SANS, fontSize: 15, color: C.mutedHi, maxWidth: 540, margin: "0 auto" }}>
+                    AI-powered risk monitoring for Sui DeFi · Real-time oracle feeds · On-chain guardian contract
+                  </div>
+                </div>
+                <div style={{ display: "grid", gridTemplateColumns: "repeat(3,1fr)", gap: 16, maxWidth: 600, margin: "28px auto 32px" }}>
+                  {[
+                    { icon: "◈", title: "Live Oracle Prices", sub: "Pyth Network + CoinGecko" },
+                    { icon: "⬡", title: "AI Risk Engine", sub: "Automated scoring & alerts" },
+                    { icon: "⛓", title: "On-Chain Guardian", sub: "RiskGuardian Move contract" },
+                  ].map(f => (
+                    <div key={f.title} style={{ padding: "16px 12px", background: C.bg, border: `1px solid ${C.border}`, borderRadius: 6 }}>
+                      <div style={{ fontFamily: MONO, fontSize: 18, color: C.accent, marginBottom: 6 }}>{f.icon}</div>
+                      <div style={{ fontFamily: MONO, fontSize: 10, color: C.text, letterSpacing: 2, marginBottom: 4 }}>{f.title}</div>
+                      <div style={{ fontFamily: SANS, fontSize: 11, color: C.muted }}>{f.sub}</div>
                     </div>
-                    <DappConnectButton
-                      connectText="CONNECT WALLET"
-                      style={{
-                        fontFamily: MONO, fontSize: 11, padding: "9px 24px",
-                        background: C.accent+"22", border: `1px solid ${C.accent}`,
-                        color: C.accent, borderRadius: 3, cursor: "pointer", letterSpacing: 1,
-                      } as any}
-                    />
-                  </Card>
-                )}
-                {isWalletConnected && livePositions.length === 0 && !isLoadingBalances && (
-                  <Card style={{ padding: 20, textAlign: "center", border: `1px solid ${C.safe}33` }}>
-                    <Glow size={13} color={C.safe} style={{ display: "block", marginBottom: 8 }}>WALLET CONNECTED · MAINNET ✓</Glow>
-                    <div style={{ fontFamily: SANS, fontSize: 12, color: C.text, marginBottom: 4 }}>
-                      Address: <span style={{ fontFamily: MONO, color: C.accent }}>{fmt.addr(walletAddr)}</span>
-                    </div>
-                    <div style={{ fontFamily: SANS, fontSize: 11, color: C.muted }}>
-                      {livePositions.length === 0 && "No SUI coin balances found on this address."}
-                    </div>
-                  </Card>
-                )}
+                  ))}
+                </div>
+                <DappConnectButton
+                  connectText="CONNECT WALLET TO GET STARTED"
+                  style={{
+                    fontFamily: MONO, fontSize: 12, padding: "12px 32px",
+                    background: C.accent+"22", border: `1px solid ${C.accent}`,
+                    color: C.accent, borderRadius: 4, cursor: "pointer",
+                    letterSpacing: 2, fontWeight: 700,
+                    textShadow: `0 0 12px ${C.accent}88`,
+                  } as any}
+                />
+                <div style={{ fontFamily: SANS, fontSize: 11, color: C.muted, marginTop: 14 }}>
+                  Supports Sui Wallet, Suiet, Martian and other dapp-kit compatible wallets
+                </div>
+              </Card>
+            ) : (
+              /* ── Portfolio view when wallet connected ── */
+              <>
+                <PortfolioOverview positions={positions} walletConnected={isWalletConnected} />
                 {isLoadingBalances && (
-                  <Card style={{ padding: 20, textAlign: "center", border: `1px solid ${C.borderHi}` }}>
+                  <Card style={{ padding: 20, textAlign: "center", border: `1px solid ${C.borderHi}`, marginBottom: 14 }}>
                     <div style={{ fontFamily: MONO, fontSize: 13, color: C.accent, animation: "pulse 1.2s infinite" }}>
                       FETCHING ON-CHAIN BALANCES…
                     </div>
                   </Card>
                 )}
+                {!isLoadingBalances && positions.length === 0 && (
+                  <Card style={{ padding: 20, textAlign: "center", border: `1px solid ${C.safe}33`, marginBottom: 14 }}>
+                    <Glow size={13} color={C.safe} style={{ display: "block", marginBottom: 8 }}>WALLET CONNECTED ✓</Glow>
+                    <div style={{ fontFamily: SANS, fontSize: 12, color: C.text, marginBottom: 4 }}>
+                      Address: <span style={{ fontFamily: MONO, color: C.accent }}>{fmt.addr(walletAddr)}</span>
+                    </div>
+                    <div style={{ fontFamily: SANS, fontSize: 11, color: C.muted }}>No coin balances found on this address.</div>
+                  </Card>
+                )}
+              </>
+            )}
+            <div style={{ display: "grid", gridTemplateColumns: "1fr 340px", gap: 14 }}>
+              <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
+                <PositionTable positions={positions} onSelect={setSelectedPos} selected={selectedPos} walletConnected={isWalletConnected} />
+                <RiskFeed events={riskEvents} walletConnected={isWalletConnected} />
+              </div>
+              <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
+                <DeepBookPanel selectedPool={selectedPool} />
               </div>
             </div>
           </>
@@ -1436,6 +1487,55 @@ export default function DeepSenseClientPage() {
                       )}
                     </>
                   )}
+                </div>
+              </Card>
+
+              {/* ORACLE FEEDS */}
+              <Card style={{ border: `1px solid ${C.border}` }}>
+                <div style={{ padding: "14px 16px", borderBottom: `1px solid ${C.border}`, display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                  <div>
+                    <Glow size={11} style={{ letterSpacing: 3, display: "block", marginBottom: 3 }}>ORACLE FEEDS</Glow>
+                    <span style={{ fontFamily: SANS, fontSize: 12, color: C.mutedHi }}>Pyth Network · 10s refresh · real-time confidence bands</span>
+                  </div>
+                  <Tag color={pythLoading ? C.muted : C.safe}>{pythLoading ? "FETCHING" : "LIVE"}</Tag>
+                </div>
+                <div style={{ display: "grid", gridTemplateColumns: "repeat(5,1fr)", gap: 0 }}>
+                  {[
+                    { label: "SUI/USD",  key: "sui" },
+                    { label: "ETH/USD",  key: "ethereum" },
+                    { label: "BTC/USD",  key: "bitcoin" },
+                    { label: "USDT/USD", key: "tether" },
+                    { label: "USDC/USD", key: "usd-coin" },
+                  ].map(({ label, key }, i) => {
+                    const p = pythPrices?.[key]
+                    const cgP = prices?.[key]
+                    const conf = p?.conf ?? 0
+                    const usd = p?.usd ?? cgP?.usd ?? null
+                    const pct = usd && usd > 0 ? (conf / usd) * 100 : null
+                    return (
+                      <div key={key} style={{
+                        padding: "14px 16px",
+                        borderRight: i < 4 ? `1px solid ${C.border}` : "none",
+                      }}>
+                        <div style={{ fontFamily: MONO, fontSize: 9, color: C.muted, letterSpacing: 2, marginBottom: 8 }}>{label}</div>
+                        {usd === null ? (
+                          <div style={{ fontFamily: MONO, fontSize: 11, color: C.muted, animation: "pulse 1.2s infinite" }}>—</div>
+                        ) : (
+                          <>
+                            <div style={{ fontFamily: MONO, fontSize: 15, fontWeight: 700, color: C.text, marginBottom: 4 }}>
+                              ${usd < 0.01 ? usd.toFixed(6) : usd < 1 ? usd.toFixed(4) : usd < 10 ? usd.toFixed(3) : usd.toFixed(2)}
+                            </div>
+                            <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                              <Tag color={p ? C.accent : C.muted}>{p ? "Pyth" : "CG"}</Tag>
+                              {pct !== null && (
+                                <span style={{ fontFamily: MONO, fontSize: 9, color: C.muted }}>±{pct.toFixed(3)}%</span>
+                              )}
+                            </div>
+                          </>
+                        )}
+                      </div>
+                    )
+                  })}
                 </div>
               </Card>
 
@@ -1661,12 +1761,68 @@ export default function DeepSenseClientPage() {
                       color: C.gold, textShadow: `0 0 8px ${C.gold}88`,
                     }}>RESET AGENT BUDGET</button>
 
-                    <button style={{
+                    <button onClick={() => {
+                      if (!showParamsForm) {
+                        setParamLeverage(String(policyState.max_leverage))
+                        setParamLiqThreshold(String(policyState.liquidation_threshold))
+                      }
+                      setShowParamsForm(v => !v)
+                    }} style={{
                       padding: "11px 14px", fontFamily: MONO, fontSize: 11, fontWeight: 700,
-                      letterSpacing: 2, borderRadius: 4, cursor: "not-allowed",
-                      background: C.gold+"0a", border: `1px solid ${C.gold}33`,
-                      color: C.muted, opacity: 0.5,
-                    }} title="Coming soon — opens parameter editor">ADJUST PARAMETERS</button>
+                      letterSpacing: 2, borderRadius: 4, cursor: "pointer",
+                      background: C.gold+"18", border: `1px solid ${C.gold}66`,
+                      color: C.gold, textShadow: `0 0 8px ${C.gold}88`,
+                    }}>ADJUST PARAMETERS</button>
+
+                    {showParamsForm && (
+                      <div style={{
+                        padding: "14px 16px", borderRadius: 4,
+                        background: C.bg, border: `1px solid ${C.border}`,
+                        display: "flex", flexDirection: "column", gap: 10,
+                      }}>
+                        <div style={{ fontFamily: MONO, fontSize: 9, color: C.muted, letterSpacing: 2 }}>SET NEW PARAMETERS</div>
+                        <div style={{ display: "flex", gap: 10 }}>
+                          <div style={{ flex: 1 }}>
+                            <div style={{ fontFamily: SANS, fontSize: 11, color: C.mutedHi, marginBottom: 4 }}>Max Leverage</div>
+                            <input
+                              type="number" min={1} value={paramLeverage}
+                              onChange={e => setParamLeverage(e.target.value)}
+                              style={{
+                                width: "100%", background: C.surface, border: `1px solid ${C.borderHi}`,
+                                color: C.text, fontFamily: MONO, fontSize: 13, padding: "7px 10px",
+                                borderRadius: 3, outline: "none",
+                              }}
+                            />
+                          </div>
+                          <div style={{ flex: 1 }}>
+                            <div style={{ fontFamily: SANS, fontSize: 11, color: C.mutedHi, marginBottom: 4 }}>Liq. Threshold (bps)</div>
+                            <input
+                              type="number" min={1} value={paramLiqThreshold}
+                              onChange={e => setParamLiqThreshold(e.target.value)}
+                              style={{
+                                width: "100%", background: C.surface, border: `1px solid ${C.borderHi}`,
+                                color: C.text, fontFamily: MONO, fontSize: 13, padding: "7px 10px",
+                                borderRadius: 3, outline: "none",
+                              }}
+                            />
+                          </div>
+                        </div>
+                        <div style={{ display: "flex", gap: 8 }}>
+                          <button onClick={handleAdjustParams} style={{
+                            flex: 1, padding: "9px 0", fontFamily: MONO, fontSize: 11, fontWeight: 700,
+                            letterSpacing: 2, borderRadius: 4, cursor: "pointer",
+                            background: C.gold+"22", border: `1px solid ${C.gold}66`,
+                            color: C.gold, textShadow: `0 0 8px ${C.gold}88`,
+                          }}>SUBMIT →</button>
+                          <button onClick={() => setShowParamsForm(false)} style={{
+                            padding: "9px 16px", fontFamily: MONO, fontSize: 11,
+                            borderRadius: 4, cursor: "pointer",
+                            background: "transparent", border: `1px solid ${C.border}`,
+                            color: C.muted,
+                          }}>CANCEL</button>
+                        </div>
+                      </div>
+                    )}
 
                     {txStatus && (
                       <div style={{
@@ -1701,27 +1857,29 @@ export default function DeepSenseClientPage() {
         {tab === "positions" && (
           <div style={{ display: "grid", gridTemplateColumns: "1fr 400px", gap: 14 }}>
             <div>
-              <PortfolioOverview positions={positions} network={network} isLive={isPositionsLive} />
-              <PositionTable positions={positions} onSelect={setSelectedPos} selected={selectedPos} isLive={isPositionsLive} />
+              <PortfolioOverview positions={positions} walletConnected={isWalletConnected} />
+              <PositionTable positions={positions} onSelect={setSelectedPos} selected={selectedPos} walletConnected={isWalletConnected} />
             </div>
             <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
-              <AIAdvisor positions={positions} pools={pools}  groqKey={groqKey} />
-              <RiskFeed events={riskEvents} />
-              <Card style={{ padding: 16 }}>
-                <SectionHeader title="POSITION HEALTH" />
-                {positions.map(p => (
-                  <div key={p.id} style={{ marginBottom: 14 }}>
-                    <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 6 }}>
-                      <span style={{ fontFamily: SANS, fontSize: 12, color: C.text }}>{p.asset}</span>
-                      <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
-                        <Tag color={p.type === "SHORT" ? C.danger : p.type === "LONG" ? C.safe : p.type === "LP" ? C.gold : C.blue}>{p.type}</Tag>
-                        <Glow color={healthColor(p.health)} size={12}>{p.health}%</Glow>
+              <AIAdvisor positions={positions} pools={pools} groqKey={groqKey} />
+              <RiskFeed events={riskEvents} walletConnected={isWalletConnected} />
+              {positions.length > 0 && (
+                <Card style={{ padding: 16 }}>
+                  <SectionHeader title="POSITION HEALTH" />
+                  {positions.map(p => (
+                    <div key={p.id} style={{ marginBottom: 14 }}>
+                      <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 6 }}>
+                        <span style={{ fontFamily: SANS, fontSize: 12, color: C.text }}>{p.asset}</span>
+                        <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+                          <Tag color={p.type === "SHORT" ? C.danger : p.type === "LONG" ? C.safe : p.type === "LP" ? C.gold : C.blue}>{p.type}</Tag>
+                          <Glow color={healthColor(p.health)} size={12}>{p.health}%</Glow>
+                        </div>
                       </div>
+                      <HealthBar value={p.health} />
                     </div>
-                    <HealthBar value={p.health} />
-                  </div>
-                ))}
-              </Card>
+                  ))}
+                </Card>
+              )}
             </div>
           </div>
         )}
@@ -1729,36 +1887,45 @@ export default function DeepSenseClientPage() {
         {/* DEEPBOOK TAB */}
         {tab === "deepbook" && (
           <div>
-            <div style={{ display: "flex", gap: 8, marginBottom: 14, flexWrap: "wrap" }}>
-              {pools.map(p => (
-                <Pill key={p.id} label={`${p.base}/${p.quote}`}
-                  active={selectedPool.id === p.id}
-                  onClick={() => setSelectedPool(p)} color={C.gold} />
-              ))}
-            </div>
+            {pools.length > 0 && (
+              <div style={{ display: "flex", gap: 8, marginBottom: 14, flexWrap: "wrap" }}>
+                {pools.map(p => (
+                  <Pill key={p.id} label={`${p.base}/${p.quote}`}
+                    active={selectedPool?.id === p.id}
+                    onClick={() => setSelectedPool(p)} color={C.gold} />
+                ))}
+              </div>
+            )}
             <div style={{ display: "grid", gridTemplateColumns: "1fr 320px", gap: 14 }}>
               <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
-                <DeepBookPanel pools={pools} selectedPool={selectedPool} />
-                <Card style={{ padding: 16 }}>
-                  <SectionHeader title="POOL STATISTICS" sub={`${selectedPool.base}/${selectedPool.quote} · DeepBook CLOB`} />
-                  <div style={{ display: "grid", gridTemplateColumns: "repeat(3,1fr)", gap: 10 }}>
-                    {[
-                      ["24H VOLUME",   fmt.usd(selectedPool.volume)],
-                      ["LIQUIDITY",    fmt.usd(selectedPool.liquidity)],
-                      ["BID/ASK SPREAD", `${selectedPool.spread}%`],
-                      ["MID PRICE",    `$${fmt.usd(selectedPool.price)}`],
-                      ["24H CHANGE",   fmt.pct(selectedPool.change)],
-                      ["DEPTH RATIO",  "1.24x"],
-                    ].map(([k, v]: any) => (
-                      <div key={k} style={{ padding: "12px 14px", background: C.bg, border: `1px solid ${C.border}`, borderRadius: 4 }}>
-                        <div style={{ fontFamily: MONO, fontSize: 9, color: C.muted, letterSpacing: 2, marginBottom: 6 }}>{k}</div>
-                        <Glow size={14} color={String(v).startsWith("-") ? C.danger : String(v).startsWith("+") ? C.safe : C.text}>{v as string}</Glow>
-                      </div>
-                    ))}
-                  </div>
-                </Card>
+                <DeepBookPanel selectedPool={selectedPool} />
+                {selectedPool && (
+                  <Card style={{ padding: 16 }}>
+                    <SectionHeader title="POOL STATISTICS" sub={`${selectedPool.base}/${selectedPool.quote} · DeepBook CLOB · Simulated`} />
+                    <div style={{ display: "grid", gridTemplateColumns: "repeat(3,1fr)", gap: 10 }}>
+                      {[
+                        ["24H VOLUME",      "—"],
+                        ["LIQUIDITY",       "—"],
+                        ["BID/ASK SPREAD",  `${selectedPool.spread}%`],
+                        ["MID PRICE",       fmt.usd(selectedPool.price)],
+                        ["24H CHANGE",      fmt.pct(selectedPool.change)],
+                        ["DATA SOURCE",     "CoinGecko / Pyth"],
+                      ].map(([k, v]: any) => (
+                        <div key={k} style={{ padding: "12px 14px", background: C.bg, border: `1px solid ${C.border}`, borderRadius: 4 }}>
+                          <div style={{ fontFamily: MONO, fontSize: 9, color: C.muted, letterSpacing: 2, marginBottom: 6 }}>{k}</div>
+                          <Glow size={14} color={String(v).startsWith("-") ? C.danger : String(v).startsWith("+") ? C.safe : C.text}>{v as string}</Glow>
+                        </div>
+                      ))}
+                    </div>
+                    <div style={{ marginTop: 10, padding: "8px 12px", background: C.bg, border: `1px solid ${C.border}`, borderRadius: 3 }}>
+                      <span style={{ fontFamily: SANS, fontSize: 11, color: C.muted }}>
+                        Volume and liquidity data require direct DeepBook API access — coming soon.
+                      </span>
+                    </div>
+                  </Card>
+                )}
               </div>
-              <TradingPanel pool={selectedPool} network={network} />
+              {selectedPool && <TradingPanel pool={selectedPool} network={network} />}
             </div>
           </div>
         )}
@@ -1766,24 +1933,26 @@ export default function DeepSenseClientPage() {
         {/* AI ADVISOR TAB */}
         {tab === "advisor" && (
           <div style={{ display: "grid", gridTemplateColumns: "1fr 360px", gap: 14 }}>
-            <AIAdvisor positions={positions} pools={pools}  groqKey={groqKey} />
+            <AIAdvisor positions={positions} pools={pools} groqKey={groqKey} />
             <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
-              <RiskFeed events={riskEvents} />
-              <Card style={{ padding: 16 }}>
-                <SectionHeader title="POSITION HEALTH" />
-                {positions.map(p => (
-                  <div key={p.id} style={{ marginBottom: 14 }}>
-                    <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 6 }}>
-                      <span style={{ fontFamily: SANS, fontSize: 12, color: C.text }}>{p.asset}</span>
-                      <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
-                        <Tag color={p.type === "SHORT" ? C.danger : p.type === "LONG" ? C.safe : p.type === "LP" ? C.gold : C.blue}>{p.type}</Tag>
-                        <Glow color={healthColor(p.health)} size={12}>{p.health}%</Glow>
+              <RiskFeed events={riskEvents} walletConnected={isWalletConnected} />
+              {positions.length > 0 && (
+                <Card style={{ padding: 16 }}>
+                  <SectionHeader title="POSITION HEALTH" />
+                  {positions.map(p => (
+                    <div key={p.id} style={{ marginBottom: 14 }}>
+                      <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 6 }}>
+                        <span style={{ fontFamily: SANS, fontSize: 12, color: C.text }}>{p.asset}</span>
+                        <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+                          <Tag color={p.type === "SHORT" ? C.danger : p.type === "LONG" ? C.safe : p.type === "LP" ? C.gold : C.blue}>{p.type}</Tag>
+                          <Glow color={healthColor(p.health)} size={12}>{p.health}%</Glow>
+                        </div>
                       </div>
+                      <HealthBar value={p.health} />
                     </div>
-                    <HealthBar value={p.health} />
-                  </div>
-                ))}
-              </Card>
+                  ))}
+                </Card>
+              )}
             </div>
           </div>
         )}
@@ -1793,22 +1962,24 @@ export default function DeepSenseClientPage() {
           <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 14 }}>
             <ScenarioSimulator positions={positions} />
             <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
-              <PortfolioOverview positions={positions} network={network} isLive={isPositionsLive} />
-              <Card style={{ padding: 16 }}>
-                <SectionHeader title="POSITION HEALTH" />
-                {positions.map(p => (
-                  <div key={p.id} style={{ marginBottom: 14 }}>
-                    <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 6 }}>
-                      <span style={{ fontFamily: SANS, fontSize: 12, color: C.text }}>{p.asset}</span>
-                      <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
-                        <Tag color={p.type === "SHORT" ? C.danger : p.type === "LONG" ? C.safe : p.type === "LP" ? C.gold : C.blue}>{p.type}</Tag>
-                        <Glow color={healthColor(p.health)} size={12}>{p.health}%</Glow>
+              <PortfolioOverview positions={positions} walletConnected={isWalletConnected} />
+              {positions.length > 0 && (
+                <Card style={{ padding: 16 }}>
+                  <SectionHeader title="POSITION HEALTH" />
+                  {positions.map(p => (
+                    <div key={p.id} style={{ marginBottom: 14 }}>
+                      <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 6 }}>
+                        <span style={{ fontFamily: SANS, fontSize: 12, color: C.text }}>{p.asset}</span>
+                        <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+                          <Tag color={p.type === "SHORT" ? C.danger : p.type === "LONG" ? C.safe : p.type === "LP" ? C.gold : C.blue}>{p.type}</Tag>
+                          <Glow color={healthColor(p.health)} size={12}>{p.health}%</Glow>
+                        </div>
                       </div>
+                      <HealthBar value={p.health} />
                     </div>
-                    <HealthBar value={p.health} />
-                  </div>
-                ))}
-              </Card>
+                  ))}
+                </Card>
+              )}
             </div>
           </div>
         )}
@@ -1821,11 +1992,11 @@ export default function DeepSenseClientPage() {
             </div>
             <div style={{ padding: 16, display: "flex", flexDirection: "column", gap: 10 }}>
               {[
-                { label: "FRONTEND LAYER",            color: C.accent,   items: ["React 19 + Next.js 16", `Sui Wallet Kit v1.0.5`, `@tanstack/react-query for data`, "AI Chat Interface", isWalletConnected ? `● Live wallet: ${fmt.addr(walletAddr)}` : "○ Viewing mock data"] },
-                { label: "SUI INTEGRATION LAYER",    color: C.blue,     items: [`${network.toUpperCase()} · Sui JSON-RPC`, "Move smart contracts", "Pyth Network oracle", "Sui object model"] },
-                { label: "DEEPBOOK LAYER",           color: C.gold,     items: ["CLOB orderbook queries", "Limit/Market orders", "Pool liquidity monitoring", "Trade fee (0.1%)"] },
+                { label: "FRONTEND LAYER",            color: C.accent,   items: ["React 19 + Next.js 16", "Sui Wallet Kit v1.0.5", "@tanstack/react-query for data", "AI Chat Interface", isWalletConnected ? `● Live wallet: ${fmt.addr(walletAddr)}` : "○ Connect wallet for live data"] },
+                { label: "SUI INTEGRATION LAYER",    color: C.blue,     items: [`${network.toUpperCase()} · Sui JSON-RPC`, "RiskGuardian Move contract", "Pyth Network oracle (10s)", "Sui object model"] },
+                { label: "DEEPBOOK LAYER",           color: C.gold,     items: ["CLOB orderbook visualization", "Limit/Market order UI", "Pool price monitoring", "Live API integration coming soon"] },
                 { label: "AI INTELLIGENCE LAYER",    color: C.accentDim, items: ["Llama 3.3 70B via Groq", "Portfolio stress testing", "Natural language advisor", "Anomaly detection signals"] },
-                { label: "DEPLOYMENT",               color: C.safe,     items: ["Vercel (this demo)", isWalletConnected ? "○ Testnet with live RPC" : "○ Testnet demo · No wallet", "DAO governance (Phase 4)"] },
+                { label: "DEPLOYMENT",               color: C.safe,     items: ["Vercel · Production build", isWalletConnected ? `● Connected: ${fmt.addr(walletAddr)}` : "○ Connect wallet to load positions", "RiskGuardian on Testnet", "DAO governance (Phase 4)"] },
               ].map(({ label, color, items }: any) => (
                 <div key={label} style={{
                   border: `1px solid ${color}33`, borderRadius: 4,

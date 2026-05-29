@@ -9,7 +9,8 @@ const GROQ_API = "https://api.groq.com/openai/v1/chat/completions"
 export async function POST(req: NextRequest) {
   try {
     const { messages, system, apiKey } = await req.json()
-    if (!apiKey) {
+    const finalKey = apiKey || process.env.GROQ_API_KEY
+    if (!finalKey) {
       return new Response(JSON.stringify({ error: "Missing apiKey" }), {
         status: 401, headers: { "Content-Type": "application/json" },
       })
@@ -27,7 +28,7 @@ export async function POST(req: NextRequest) {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
-        Authorization: `Bearer ${apiKey}`,
+        Authorization: `Bearer ${finalKey}`,
       },
       body: JSON.stringify({
         model: "llama-3.3-70b-versatile",
