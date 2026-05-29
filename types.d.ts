@@ -94,6 +94,39 @@ declare module "@mysten/sui/jsonRpc" {
     hasNextPage: boolean
   }
 
+  export interface SuiObjectDataOptions {
+    showBcs?: boolean
+    showContent?: boolean
+    showDisplay?: boolean
+    showOwner?: boolean
+    showPreviousTransaction?: boolean
+    showStorageRebate?: boolean
+    showType?: boolean
+  }
+
+  export interface SuiObjectData {
+    objectId: string
+    version: string
+    digest: string
+    type?: string | null
+    content?: {
+      dataType: string
+      fields: Record<string, unknown>
+      type?: string
+    } | null
+  }
+
+  export interface SuiObjectResponse {
+    data?: SuiObjectData | null
+    error?: unknown
+  }
+
+  export interface PaginatedObjectsResponse {
+    data: SuiObjectResponse[]
+    hasNextPage: boolean
+    nextCursor?: string | null
+  }
+
   export class SuiJsonRpcClient {
     constructor(options: SuiJsonRpcClientOptions)
     getObject(params: {
@@ -106,6 +139,13 @@ declare module "@mysten/sui/jsonRpc" {
       limit?: number | null
       order?: "ascending" | "descending" | null
     }): Promise<PaginatedEvents>
+    getOwnedObjects(params: {
+      owner: string
+      cursor?: string | null
+      limit?: number | null
+      filter?: unknown
+      options?: SuiObjectDataOptions | null
+    }): Promise<PaginatedObjectsResponse>
   }
 }
 

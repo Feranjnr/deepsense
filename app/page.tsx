@@ -7,6 +7,7 @@ import { Transaction } from "@mysten/sui/transactions"
 import { useRiskGuardian } from "@/app/hooks/useRiskGuardian"
 import { useRiskEngine } from "@/app/hooks/useRiskEngine"
 import { usePythPrices } from "@/app/hooks/usePythPrices"
+import { useProtocolPositions, type ProtocolPosition } from "@/app/hooks/useProtocolPositions"
 import { RISK_GUARDIAN } from "@/app/config/contracts"
 
 // ─── DESIGN TOKENS ─────────────────────────────────────────────────────────────
@@ -1043,10 +1044,19 @@ export default function DeepSenseClientPage() {
   // ── computed props passed to child components ──
   const { pools, prices }  = useCoinGeckoPrices()
   const { pythPrices, loading: pythLoading } = usePythPrices()
-  // Derive positions from raw balances + live prices — re-prices automatically on each CoinGecko refresh
+  // Derive coin-balance positions from raw balances + live prices
   const positions: RpcPosition[] = rawBalances
     .map((b, i) => coinToPosition(b.coinType, b.rawAmt, b.decimals, b.symbol, i, prices))
     .sort((a, b) => b.size - a.size)
+
+  // Protocol position aggregator — scans all owned objects for DeFi protocol objects
+  const {
+    positions: protocolPositions,
+    loading: protocolLoading,
+    error: protocolError,
+    protocolCounts,
+  } = useProtocolPositions(walletAddr, network)
+
   console.log("[DeepSense] Wallet status:", { isWalletConnected, walletAddr, livePositionsCount: positions.length, isLoadingBalances })
   const riskEvents = generateRiskEvents(positions)
 
@@ -1302,6 +1312,50 @@ export default function DeepSenseClientPage() {
               </div>
               <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
                 <DeepBookPanel selectedPool={selectedPool} />
+
+                {/* PROTOCOL COVERAGE */}
+                <Card>
+                  <div style={{ padding: "14px 16px", borderBottom: `1px solid ${C.border}`, display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                    <div>
+                      <Glow size={11} style={{ letterSpacing: 3, display: "block", marginBottom: 3 }}>PROTOCOL COVERAGE</Glow>
+                      <span style={{ fontFamily: SANS, fontSize: 12, color: C.mutedHi }}>Scanned {Object.keys(protocolCounts).length > 0 ? Object.keys(protocolCounts).length : "8"} protocols · Mainnet</span>
+                    </div>
+                    {protocolLoading && (
+                      <span style={{ fontFamily: MONO, fontSize: 9, color: C.accent, animation: "pulse 1.2s infinite" }}>SCANNING…</span>
+                    )}
+                  </div>
+                  <div>
+                    {[
+                      "Navi Protocol", "Scallop", "Cetus", "Aftermath Finance",
+                      "Bluefin", "SuiLend", "DeepBook", "Ember",
+                    ].map((proto, i, arr) => {
+                      const count = protocolCounts[proto] ?? 0
+                      return (
+                        <div key={proto} style={{
+                          padding: "10px 16px",
+                          borderBottom: i < arr.length - 1 ? `1px solid ${C.border}` : "none",
+                          display: "flex", justifyContent: "space-between", alignItems: "center",
+                        }}>
+                          <span style={{ fontFamily: SANS, fontSize: 12, color: count > 0 ? C.text : C.muted }}>{proto}</span>
+                          <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                            {count > 0 ? (
+                              <Tag color={C.safe}>{count} position{count !== 1 ? "s" : ""}</Tag>
+                            ) : (
+                              <span style={{ fontFamily: MONO, fontSize: 10, color: C.muted }}>
+                                {!isWalletConnected ? "—" : protocolLoading ? "…" : "0"}
+                              </span>
+                            )}
+                          </div>
+                        </div>
+                      )
+                    })}
+                    {protocolError && (
+                      <div style={{ padding: "8px 16px", fontFamily: SANS, fontSize: 11, color: C.danger }}>
+                        Scan error: {protocolError}
+                      </div>
+                    )}
+                  </div>
+                </Card>
               </div>
             </div>
           </>
@@ -1855,31 +1909,98 @@ export default function DeepSenseClientPage() {
 
         {/* POSITIONS TAB */}
         {tab === "positions" && (
-          <div style={{ display: "grid", gridTemplateColumns: "1fr 400px", gap: 14 }}>
-            <div>
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 380px", gap: 14 }}>
+            <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
               <PortfolioOverview positions={positions} walletConnected={isWalletConnected} />
+
+              {/* Wallet Balances section */}
               <PositionTable positions={positions} onSelect={setSelectedPos} selected={selectedPos} walletConnected={isWalletConnected} />
+
+              {/* Protocol Positions section */}
+              <Card>
+                <div style={{ padding: "14px 16px", borderBottom: `1px solid ${C.border}`, display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                  <div>
+                    <Glow size={11} style={{ letterSpacing: 3, display: "block", marginBottom: 3 }}>PROTOCOL POSITIONS</Glow>
+                    <span style={{ fontFamily: SANS, fontSize: 12, color: C.mutedHi }}>
+                      Navi · Scallop · Cetus · Bluefin · SuiLend · DeepBook · 8 protocols scanned
+                    </span>
+                  </div>
+                  <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+                    {protocolLoading && <span style={{ fontFamily: MONO, fontSize: 9, color: C.accent, animation: "pulse 1.2s infinite" }}>SCANNING…</span>}
+                    {protocolPositions.length > 0 && <Tag color={C.safe}>{protocolPositions.length} found</Tag>}
+                  </div>
+                </div>
+
+                {!isWalletConnected ? (
+                  <div style={{ padding: "28px 16px", textAlign: "center" }}>
+                    <div style={{ fontFamily: MONO, fontSize: 12, color: C.muted, marginBottom: 4 }}>Connect wallet to scan DeFi protocols</div>
+                    <div style={{ fontFamily: SANS, fontSize: 11, color: C.muted }}>All owned objects are scanned for known protocol position types.</div>
+                  </div>
+                ) : protocolPositions.length === 0 && !protocolLoading ? (
+                  <div style={{ padding: "28px 16px", textAlign: "center" }}>
+                    <div style={{ fontFamily: MONO, fontSize: 12, color: C.muted, marginBottom: 4 }}>No protocol positions found</div>
+                    <div style={{ fontFamily: SANS, fontSize: 11, color: C.muted }}>No Navi, Scallop, Cetus, or other DeFi protocol objects detected on this address.</div>
+                  </div>
+                ) : (
+                  /* Group by protocol */
+                  (() => {
+                    const grouped: Record<string, ProtocolPosition[]> = {}
+                    for (const p of protocolPositions) {
+                      if (!grouped[p.protocol]) grouped[p.protocol] = []
+                      grouped[p.protocol].push(p)
+                    }
+                    return Object.entries(grouped).map(([proto, items]) => (
+                      <div key={proto}>
+                        <div style={{
+                          padding: "8px 16px", background: C.surface,
+                          borderBottom: `1px solid ${C.border}`,
+                          display: "flex", alignItems: "center", gap: 8,
+                        }}>
+                          <span style={{ fontFamily: MONO, fontSize: 10, color: C.accent, letterSpacing: 2 }}>{proto.toUpperCase()}</span>
+                          <Tag color={C.accent}>{items.length}</Tag>
+                        </div>
+                        {items.map((pos, i) => (
+                          <div key={pos.objectId} style={{
+                            padding: "11px 16px",
+                            borderBottom: i < items.length - 1 ? `1px solid ${C.border}` : "none",
+                            display: "flex", justifyContent: "space-between", alignItems: "center",
+                          }}>
+                            <div style={{ display: "flex", gap: 10, alignItems: "center" }}>
+                              <Tag color={
+                                pos.type === "BORROW" ? C.danger :
+                                pos.type === "LEND"   ? C.safe   :
+                                pos.type === "LP"     ? C.gold   :
+                                pos.type === "STAKE"  ? C.blue   : C.accent
+                              }>{pos.type}</Tag>
+                              <span style={{ fontFamily: MONO, fontSize: 12, color: C.text }}>{pos.asset}</span>
+                            </div>
+                            <div style={{ display: "flex", gap: 12, alignItems: "center" }}>
+                              <span style={{ fontFamily: MONO, fontSize: 9, color: C.muted }}>
+                                {pos.objectId.slice(0, 10)}…
+                              </span>
+                              <a
+                                href={`https://suiscan.xyz/${network}/object/${pos.objectId}`}
+                                target="_blank" rel="noopener noreferrer"
+                                style={{ fontFamily: MONO, fontSize: 9, color: C.blue, textDecoration: "none" }}
+                              >↗</a>
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    ))
+                  })()
+                )}
+                {protocolError && (
+                  <div style={{ padding: "8px 16px", fontFamily: SANS, fontSize: 11, color: C.danger }}>
+                    Scan error: {protocolError}
+                  </div>
+                )}
+              </Card>
             </div>
+
             <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
               <AIAdvisor positions={positions} pools={pools} groqKey={groqKey} />
               <RiskFeed events={riskEvents} walletConnected={isWalletConnected} />
-              {positions.length > 0 && (
-                <Card style={{ padding: 16 }}>
-                  <SectionHeader title="POSITION HEALTH" />
-                  {positions.map(p => (
-                    <div key={p.id} style={{ marginBottom: 14 }}>
-                      <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 6 }}>
-                        <span style={{ fontFamily: SANS, fontSize: 12, color: C.text }}>{p.asset}</span>
-                        <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
-                          <Tag color={p.type === "SHORT" ? C.danger : p.type === "LONG" ? C.safe : p.type === "LP" ? C.gold : C.blue}>{p.type}</Tag>
-                          <Glow color={healthColor(p.health)} size={12}>{p.health}%</Glow>
-                        </div>
-                      </div>
-                      <HealthBar value={p.health} />
-                    </div>
-                  ))}
-                </Card>
-              )}
             </div>
           </div>
         )}
