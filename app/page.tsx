@@ -1325,10 +1325,16 @@ export default function DeepSenseClientPage() {
                     )}
                   </div>
                   <div>
-                    {[
-                      "Navi Protocol", "Scallop", "Cetus", "Aftermath Finance",
-                      "Bluefin", "SuiLend", "DeepBook", "Ember",
-                    ].map((proto, i, arr) => {
+                    {([
+                      ["Navi Protocol",    C.safe],
+                      ["Scallop",          "#8b5cf6"],
+                      ["Cetus",            C.blue],
+                      ["Aftermath Finance",C.danger],
+                      ["Bluefin",          C.accent],
+                      ["SuiLend",          C.warn],
+                      ["DeepBook",         C.gold],
+                      ["Ember",            "#ec4899"],
+                    ] as [string, string][]).map(([proto, protoColor], i, arr) => {
                       const count = protocolCounts[proto] ?? 0
                       return (
                         <div key={proto} style={{
@@ -1336,10 +1342,13 @@ export default function DeepSenseClientPage() {
                           borderBottom: i < arr.length - 1 ? `1px solid ${C.border}` : "none",
                           display: "flex", justifyContent: "space-between", alignItems: "center",
                         }}>
-                          <span style={{ fontFamily: SANS, fontSize: 12, color: count > 0 ? C.text : C.muted }}>{proto}</span>
+                          <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                            <div style={{ width: 6, height: 6, borderRadius: "50%", background: count > 0 ? protoColor : C.muted, opacity: count > 0 ? 1 : 0.4 }} />
+                            <span style={{ fontFamily: SANS, fontSize: 12, color: count > 0 ? C.text : C.muted }}>{proto}</span>
+                          </div>
                           <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
                             {count > 0 ? (
-                              <Tag color={C.safe}>{count} position{count !== 1 ? "s" : ""}</Tag>
+                              <Tag color={protoColor}>{count} position{count !== 1 ? "s" : ""}</Tag>
                             ) : (
                               <span style={{ fontFamily: MONO, fontSize: 10, color: C.muted }}>
                                 {!isWalletConnected ? "—" : protocolLoading ? "…" : "0"}
@@ -1944,50 +1953,77 @@ export default function DeepSenseClientPage() {
                 ) : (
                   /* Group by protocol */
                   (() => {
+                    const PROTO_COLORS: Record<string, string> = {
+                      "Navi Protocol":     C.safe,
+                      "Scallop":           "#8b5cf6",
+                      "Cetus":             C.blue,
+                      "Aftermath Finance": C.danger,
+                      "Bluefin":           C.accent,
+                      "SuiLend":           C.warn,
+                      "DeepBook":          C.gold,
+                      "Ember":             "#ec4899",
+                    }
+                    const TYPE_COLORS: Record<string, string> = {
+                      LP:       "#8b5cf6",
+                      LEND:     C.safe,
+                      BORROW:   C.warn,
+                      STAKE:    C.blue,
+                      POSITION: C.muted,
+                    }
                     const grouped: Record<string, ProtocolPosition[]> = {}
                     for (const p of protocolPositions) {
                       if (!grouped[p.protocol]) grouped[p.protocol] = []
                       grouped[p.protocol].push(p)
                     }
-                    return Object.entries(grouped).map(([proto, items]) => (
-                      <div key={proto}>
-                        <div style={{
-                          padding: "8px 16px", background: C.surface,
-                          borderBottom: `1px solid ${C.border}`,
-                          display: "flex", alignItems: "center", gap: 8,
-                        }}>
-                          <span style={{ fontFamily: MONO, fontSize: 10, color: C.accent, letterSpacing: 2 }}>{proto.toUpperCase()}</span>
-                          <Tag color={C.accent}>{items.length}</Tag>
-                        </div>
-                        {items.map((pos, i) => (
-                          <div key={pos.objectId} style={{
-                            padding: "11px 16px",
-                            borderBottom: i < items.length - 1 ? `1px solid ${C.border}` : "none",
-                            display: "flex", justifyContent: "space-between", alignItems: "center",
+                    return Object.entries(grouped).map(([proto, items]) => {
+                      const protoColor = PROTO_COLORS[proto] ?? C.accent
+                      return (
+                        <div key={proto}>
+                          <div style={{
+                            padding: "8px 16px", background: C.surface,
+                            borderBottom: `1px solid ${C.border}`,
+                            display: "flex", alignItems: "center", gap: 8,
                           }}>
-                            <div style={{ display: "flex", gap: 10, alignItems: "center" }}>
-                              <Tag color={
-                                pos.type === "BORROW" ? C.danger :
-                                pos.type === "LEND"   ? C.safe   :
-                                pos.type === "LP"     ? C.gold   :
-                                pos.type === "STAKE"  ? C.blue   : C.accent
-                              }>{pos.type}</Tag>
-                              <span style={{ fontFamily: MONO, fontSize: 12, color: C.text }}>{pos.asset}</span>
-                            </div>
-                            <div style={{ display: "flex", gap: 12, alignItems: "center" }}>
-                              <span style={{ fontFamily: MONO, fontSize: 9, color: C.muted }}>
-                                {pos.objectId.slice(0, 10)}…
-                              </span>
-                              <a
-                                href={`https://suiscan.xyz/${network}/object/${pos.objectId}`}
-                                target="_blank" rel="noopener noreferrer"
-                                style={{ fontFamily: MONO, fontSize: 9, color: C.blue, textDecoration: "none" }}
-                              >↗</a>
-                            </div>
+                            <div style={{ width: 7, height: 7, borderRadius: "50%", background: protoColor }} />
+                            <span style={{ fontFamily: MONO, fontSize: 10, color: protoColor, letterSpacing: 2 }}>{proto.toUpperCase()}</span>
+                            <Tag color={protoColor}>{items.length}</Tag>
                           </div>
-                        ))}
-                      </div>
-                    ))
+                          {items.map((pos, i) => {
+                            const typeColor = TYPE_COLORS[pos.type] ?? C.accent
+                            const valueLabel = pos.details.balance
+                              ? `bal: ${pos.details.balance}`
+                              : pos.details.liquidity
+                              ? `liq: ${pos.details.liquidity}`
+                              : null
+                            return (
+                              <div key={pos.objectId} style={{
+                                padding: "11px 16px",
+                                borderBottom: i < items.length - 1 ? `1px solid ${C.border}` : "none",
+                                display: "flex", justifyContent: "space-between", alignItems: "center",
+                              }}>
+                                <div style={{ display: "flex", gap: 10, alignItems: "center" }}>
+                                  <Tag color={typeColor}>{pos.type}</Tag>
+                                  <span style={{ fontFamily: MONO, fontSize: 12, color: C.text }}>{pos.asset}</span>
+                                  {valueLabel && (
+                                    <span style={{ fontFamily: MONO, fontSize: 9, color: C.mutedHi }}>{valueLabel}</span>
+                                  )}
+                                </div>
+                                <div style={{ display: "flex", gap: 12, alignItems: "center" }}>
+                                  <span style={{ fontFamily: MONO, fontSize: 9, color: C.muted }}>
+                                    {pos.objectId.slice(0, 10)}…
+                                  </span>
+                                  <a
+                                    href={`https://suiscan.xyz/${network}/object/${pos.objectId}`}
+                                    target="_blank" rel="noopener noreferrer"
+                                    style={{ fontFamily: MONO, fontSize: 9, color: C.blue, textDecoration: "none" }}
+                                  >↗</a>
+                                </div>
+                              </div>
+                            )
+                          })}
+                        </div>
+                      )
+                    })
                   })()
                 )}
                 {protocolError && (

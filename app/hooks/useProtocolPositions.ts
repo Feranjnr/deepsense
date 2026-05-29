@@ -12,6 +12,13 @@ export type ProtocolPosition = {
   objectId: string;
   fields: Record<string, unknown>;
   rawType: string;
+  details: {
+    liquidity?: string;
+    balance?: string;
+    coinTypeA?: string;
+    coinTypeB?: string;
+    [key: string]: string | undefined;
+  };
 };
 
 type HookResult = {
@@ -111,24 +118,46 @@ const PROTOCOL_RULES: ProtocolRule[] = [
 
 // ─── Asset extraction helpers ─────────────────────────────────────────────────
 
-// Known coin type → human-readable symbol
+// Known full coin type prefixes → symbol
 const COIN_SYMBOLS: Record<string, string> = {
-  "0x2::sui::sui":                                    "SUI",
+  "0x2::sui::sui":                                                                    "SUI",
   "0x5d4b302506645c3a13cd8c5f0ddc6aba02ad24abf5e0a231dff76c990c531b86::coin::coin": "USDC",
   "0xc060006111016b8a020ad5b33834984a437aaa7d3c74c18e09a95d48aceab08c::coin::coin": "USDT",
-  "0xaafb102dd0902f5055cadecd687fb5b71ca82ef0e0285d78bf3ec1"    : "ETH",  // stub prefix
+  "0xaafb102dd0902f5055cadecd687fb5b71ca82ef0e0285d78bf3ec1":                       "ETH",
   "0x027792d9fed7f9844eb4839566001bb6f6cb4804f66aa2da6fe1ee242d896881::coin::coin": "BTC",
 };
+
+// Keyword → symbol (matched against the last path segment of a coin type)
+const COIN_KEYWORDS: [string, string][] = [
+  ["usdc",  "USDC"],
+  ["usdt",  "USDT"],
+  ["weth",  "WETH"],
+  ["cetus", "CETUS"],
+  ["deep",  "DEEP"],
+  ["navx",  "NAVX"],
+  ["buck",  "BUCK"],
+  ["hasui", "haSUI"],
+  ["vsui",  "vSUI"],
+  ["afsui", "afSUI"],
+  ["sui",   "SUI"],
+  ["eth",   "ETH"],
+  ["btc",   "BTC"],
+];
 
 function coinTypeToSymbol(coinType: string): string {
   const lower = coinType.toLowerCase().replace(/\s/g, "");
   for (const [k, v] of Object.entries(COIN_SYMBOLS)) {
-    if (lower.includes(k.toLowerCase())) return v;
+    if (lower.startsWith(k.toLowerCase())) return v;
   }
-  // Fall back to the last segment of the type (e.g. "::USDC" → "USDC")
-  const parts = coinType.split("::");
+  // Keyword match on last segment (e.g. "::haSUI" or "::USDC")
+  const parts = lower.split("::");
   const last = parts[parts.length - 1];
-  return last.length <= 8 ? last.toUpperCase() : last.slice(0, 8).toUpperCase();
+  for (const [kw, sym] of COIN_KEYWORDS) {
+    if (last.includes(kw)) return sym;
+  }
+  // Fall back to raw last segment, uppercased (cap at 8 chars)
+  const rawLast = coinType.split("::").pop() ?? coinType;
+  return rawLast.length <= 8 ? rawLast.toUpperCase() : rawLast.slice(0, 8).toUpperCase();
 }
 
 /** Extract first generic type parameter coin symbol from a type string like Foo<0x2::sui::SUI> */
@@ -232,6 +261,18 @@ export function useProtocolPositions(
         if (!rule) continue
 
         const fields: Record<string, unknown> = data.content?.fields ?? {}
+
+        // Extract structured details from content fields
+        const details: ProtocolPosition["details"] = {}
+        const liq = fields["liquidity"] ?? fields["lp_amount"] ?? fields["lp_balance"]
+        if (liq != null) details.liquidity = String(liq)
+        const bal = fields["balance"] ?? fields["amount"] ?? fields["value"] ?? fields["coin_amount"]
+        if (bal != null) details.balance = String(bal)
+        const ctA = fields["coin_type_a"] ?? fields["type_a"]
+        if (ctA != null) details.coinTypeA = coinTypeToSymbol(String(ctA))
+        const ctB = fields["coin_type_b"] ?? fields["type_b"]
+        if (ctB != null) details.coinTypeB = coinTypeToSymbol(String(ctB))
+
         found.push({
           protocol:  rule.protocol,
           type:      rule.inferType(rawType),
@@ -239,6 +280,7 @@ export function useProtocolPositions(
           objectId:  String(data.objectId ?? ""),
           fields,
           rawType,
+          details,
         })
       }
 
