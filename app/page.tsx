@@ -59,24 +59,6 @@ const NET = {
   mainnet: { label: "MAINNET", color: C.safe,   rpc: "https://fullnode.mainnet.sui.io" },
 }
 
-// ─── COIN METADATA LOOKUP TABLE ───────────────────────────────────────────────
-// Maps Sui runtime coin types (MVR type format) to human-readable symbol.
-// Keys use short 0x prefix, values use full canonical form for RPC calls.
-const COIN_DEFS: Record<string, { symbol: string; decimals: number; short: string }> = {
-  "0x2::sui::SUI":  { symbol: "SUI",  decimals: 9,  short: "0x2::sui::SUI" },
-  "0x5d4b302506645c3a13cd8c5f0ddc6aba02ad24abf5e0a231dff76c990c531b86::coin::COIN": { symbol: "USDC", decimals: 6, short: "0x5d4b3025..." },
-}
-
-/** Look up coin metadata symbol, falling back to coinType short-id */
-function coinSymbol(coinType: string): string {
-  return COIN_DEFS[coinType]?.symbol ?? coinType.split("::").pop() ?? "UNKNOWN"
-}
-
-/** Resolve full canonical coin type (MVR names supported) */
-function canonicalCoinType(coinType: string): string {
-  // coinType already comes back as canonical from RPC; return as-is if matched
-  return COIN_DEFS[coinType] ? coinType : coinType
-}
 
 // ─── POOL TEMPLATES ────────────────────────────────────────────────────────────
 // Prices come from CoinGecko/Pyth. Volume & liquidity require DeepBook API — not available yet.
@@ -360,8 +342,8 @@ function PositionTable({ positions, onSelect, selected, walletConnected }: any) 
         </div>
       ) : positions.length === 0 ? (
         <div style={{ padding: 32, textAlign: "center" }}>
-          <div style={{ fontFamily: MONO, fontSize: 13, color: C.muted, marginBottom: 8 }}>No positions found</div>
-          <div style={{ fontFamily: SANS, fontSize: 12, color: C.muted }}>No coin balances detected on this address.</div>
+          <div style={{ fontFamily: MONO, fontSize: 13, color: C.muted, marginBottom: 8 }}>No DeFi positions found</div>
+          <div style={{ fontFamily: SANS, fontSize: 12, color: C.muted }}>No Navi, Scallop, Cetus, or other DeFi protocol positions detected on this wallet.</div>
         </div>
       ) : (
         <div style={{ overflowX: "auto" }}>
@@ -390,23 +372,15 @@ function PositionTable({ positions, onSelect, selected, walletConnected }: any) 
                     <Tag color={p.type==="SHORT"?C.danger : p.type==="LONG"?C.safe : p.type==="LP"?C.gold : C.blue}>{p.type}</Tag>
                   </td>
                   <td style={{ padding: "12px 14px" }}><span style={{ fontFamily: MONO, fontSize: 12, color: C.text }}>{p.asset}</span></td>
-                  <td style={{ padding: "12px 14px" }}><span style={{ fontFamily: MONO, fontSize: 12, color: C.text }}>{fmt.usd(p.size)}</span></td>
+                  <td style={{ padding: "12px 14px" }}><span style={{ fontFamily: MONO, fontSize: 12, color: C.text }}>{p.balStr ? `${parseFloat(p.balStr).toFixed(4)} ${p.asset}` : "—"}</span></td>
                   <td style={{ padding: "12px 14px" }}>
-                    <span style={{ fontFamily: MONO, fontSize: 12, color: p.leverage > 2 ? C.warn : C.text }}>{p.leverage}x</span>
+                    <span style={{ fontFamily: MONO, fontSize: 12, color: C.muted }}>—</span>
                   </td>
                   <td style={{ padding: "12px 14px", minWidth: 80 }}>
-                    <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-                      <HealthBar value={p.health} style={{ flex: 1 }} />
-                      <span style={{ fontFamily: MONO, fontSize: 11, color: healthColor(p.health), minWidth: 30 }}>{p.health}%</span>
-                    </div>
+                    <span style={{ fontFamily: MONO, fontSize: 12, color: C.muted }}>—</span>
                   </td>
                   <td style={{ padding: "12px 14px" }}>
-                    {p.type === "SPOT"
-                      ? <span style={{ fontFamily: MONO, fontSize: 12, color: C.muted }}>HODL</span>
-                      : <span style={{ fontFamily: MONO, fontSize: 12, color: p.pnl >= 0 ? C.safe : C.danger }}>
-                          {fmt.usd(Math.abs(p.pnl))} <span style={{ fontSize: 10 }}>({fmt.pct(p.pnlPct)})</span>
-                        </span>
-                    }
+                    <span style={{ fontFamily: MONO, fontSize: 12, color: C.muted }}>—</span>
                   </td>
                   <td style={{ padding: "12px 14px" }}>
                     <button style={{
@@ -993,60 +967,6 @@ function WalletBar({ network, setNetwork }: any) {
   )
 }
 
-// ─── LIVE POSITIONS HELPER ─────────────────────────────────────────────────────
-// Convert Sui RPC coin balances into the Position shape the UI expects
-type RpcPosition = {
-  id: string
-  protocol: string
-  type: string
-  asset: string
-  size: number
-  collateral: number
-  leverage: number
-  entryPrice: number | null
-  liquidationPrice: number | null
-  health: number
-  pnl: number
-  pnlPct: number
-  pool: string
-}
-
-const SYMBOL_TO_CG: Record<string, string> = {
-  SUI: "sui", ETH: "ethereum", BTC: "bitcoin", USDT: "tether", USDC: "usd-coin",
-}
-
-function coinToPosition(
-  coinType: string,
-  rawAmt: number,
-  decimals: number,
-  symbol: string,
-  index: number,
-  prices: Record<string, { usd: number; chg: number }> | null,
-): RpcPosition {
-  const amount = rawAmt / Math.pow(10, decimals)
-  const cgId = SYMBOL_TO_CG[symbol]
-  const refPrice = (cgId && prices?.[cgId]?.usd) ? prices[cgId].usd : 1
-
-  return {
-    id:         `onchain-${symbol}-${index}`,
-    protocol:   "Sui On-Chain",
-    type:       "SPOT",
-    asset:      symbol,
-    size:       Math.round(amount * refPrice),
-    collateral: Math.round(amount * refPrice * 0.5),
-    leverage:   1,
-    entryPrice: refPrice,
-    liquidationPrice: null,
-    health:     100,
-    pnl:        0,
-    pnlPct:     0,
-    pool:       `pool_${symbol.toLowerCase()}_usdc`,
-  }
-}
-
-function isValidCoinType(ct: string): boolean {
-  return ct.includes("::")
-}
 
 // ─── DYNAMIC RISK EVENTS ──────────────────────────────────────────────────────
 function generateRiskEvents(positions: any[]): any[] {
@@ -1091,53 +1011,11 @@ export default function DeepSenseClientPage() {
   const suiClient            = useSuiClient()
   const walletAddr           = currentAccount?.address ?? null
   const isWalletConnected    = !!walletAddr
-  // ── raw balances (re-fetched on wallet/network change) ──
-  const [rawBalances, setRawBalances] = useState<Array<{coinType: string; rawAmt: number; symbol: string; decimals: number}>>([])
-  const [isLoadingBalances, setIsLoadingBalances] = useState(false)
-  const [balanceError, setBalanceError] = useState<string | null>(null)
-
-  // Fetch raw coin balances when wallet or network changes
-  useEffect(() => {
-    if (!walletAddr || !suiClient) { setRawBalances([]); setBalanceError(null); return }
-    setIsLoadingBalances(true)
-    setBalanceError(null)
-    let cancelled = false
-    ;(async () => {
-      try {
-        const balances = await suiClient.getAllBalances({ owner: walletAddr })
-        console.log("[DeepSense] Raw balances from RPC:", JSON.stringify(balances, null, 2))
-        if (cancelled) return
-        const fetched: Array<{coinType: string; rawAmt: number; symbol: string; decimals: number}> = []
-        for (let i = 0; i < balances.length; i++) {
-          const entry = balances[i]
-          const coinType = typeof entry.coinType === "string" ? entry.coinType : ""
-          if (!isValidCoinType(coinType)) continue
-          const rawAmt = Number(BigInt(entry.totalBalance))
-          const symbol = coinSymbol(coinType)
-          const decimals = COIN_DEFS[coinType]?.decimals ?? 9
-          fetched.push({ coinType, rawAmt, symbol, decimals })
-        }
-        console.log("[DeepSense] Processed positions:", fetched.length, fetched)
-        if (!cancelled) setRawBalances(fetched)
-      } catch (err: any) {
-        console.error("[DeepSense] getAllBalances error:", err)
-        if (!cancelled) setBalanceError(err?.message ?? "Failed to load balances from Sui RPC")
-      } finally {
-        if (!cancelled) setIsLoadingBalances(false)
-      }
-    })()
-    return () => { cancelled = true }
-  }, [walletAddr, suiClient, network])
-
   // ── computed props passed to child components ──
   const { pools, prices, loading: cgLoading } = useCoinGeckoPrices()
   const { pythPrices, loading: pythLoading, error: pythError } = usePythPrices()
-  // Derive coin-balance positions from raw balances + live prices
-  const positions: RpcPosition[] = rawBalances
-    .map((b, i) => coinToPosition(b.coinType, b.rawAmt, b.decimals, b.symbol, i, prices))
-    .sort((a, b) => b.size - a.size)
 
-  // Protocol position aggregator — scans all owned objects for DeFi protocol objects
+  // Protocol position aggregator — Navi SDK + raw object scan on Sui Mainnet
   const {
     positions: protocolPositions,
     loading: protocolLoading,
@@ -1145,7 +1023,27 @@ export default function DeepSenseClientPage() {
     protocolCounts,
   } = useProtocolPositions(walletAddr, "mainnet")
 
-  console.log("[DeepSense] Wallet status:", { isWalletConnected, walletAddr, livePositionsCount: positions.length, isLoadingBalances })
+  // Adapt ProtocolPosition[] to the shape expected by PortfolioOverview, PositionTable, etc.
+  // Financial metrics (size in USD, health %, PnL) are not available from the scanner;
+  // they default to neutral values so no fake data is displayed.
+  const positions = protocolPositions.map((p, i) => ({
+    id:               p.objectId || `pp-${i}`,
+    protocol:         p.protocol,
+    type:             p.type,
+    asset:            p.asset,
+    size:             0,
+    collateral:       0,
+    leverage:         1,
+    entryPrice:       null,
+    liquidationPrice: null,
+    health:           100,
+    pnl:              0,
+    pnlPct:           0,
+    pool:             "",
+    balStr:           p.details.balance ?? p.details.liquidity ?? null,
+  }))
+
+  console.log("[DeepSense] Wallet status:", { isWalletConnected, walletAddr, livePositionsCount: positions.length, protocolLoading })
   const riskEvents = generateRiskEvents(positions)
 
   const [selectedPos, setSelectedPos] = useState<any>(null)
@@ -1645,17 +1543,14 @@ export default function DeepSenseClientPage() {
               /* ── Portfolio view when wallet connected ── */
               <>
                 {/* Errors surface here — never a blank screen */}
-                {balanceError && (
-                  <ErrorBanner
-                    message={`Sui RPC error: ${balanceError}`}
-                    onRetry={() => { setBalanceError(null); setIsLoadingBalances(true) }}
-                  />
+                {protocolError && (
+                  <ErrorBanner message={`Position scan error: ${protocolError}`} />
                 )}
                 {pythError && !pythLoading && (
                   <ErrorBanner message={`Pyth oracle unavailable — prices may be stale: ${pythError}`} />
                 )}
-                {/* Skeleton metric cards while balances load */}
-                {isLoadingBalances ? (
+                {/* Skeleton metric cards while positions load */}
+                {protocolLoading && positions.length === 0 ? (
                   <>
                     <div className="ds-metric-grid" style={{ marginBottom: 16 }}>
                       {[1,2,3,4].map(i => <SkeletonCard key={i} lines={2} />)}
@@ -1674,7 +1569,7 @@ export default function DeepSenseClientPage() {
                 ) : (
                   <>
                     <PortfolioOverview positions={positions} walletConnected={isWalletConnected} />
-                    {positions.length === 0 && !balanceError && (
+                    {positions.length === 0 && !protocolError && (
                       <Card style={{ padding: "20px 24px", marginBottom: 14, border: `1px solid ${C.safe}22` }}>
                         <div style={{ display: "flex", alignItems: "center", gap: 14 }}>
                           <span style={{
@@ -1688,7 +1583,7 @@ export default function DeepSenseClientPage() {
                               WALLET CONNECTED · {fmt.addr(walletAddr)}
                             </div>
                             <div style={{ fontFamily: SANS, fontSize: 12, color: C.muted }}>
-                              No coin balances found on this address yet. Deposit SUI or supported tokens to begin monitoring.
+                              No DeFi positions found on this wallet on Sui Mainnet yet.
                             </div>
                           </div>
                         </div>
