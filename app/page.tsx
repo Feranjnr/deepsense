@@ -1143,7 +1143,7 @@ export default function DeepSenseClientPage() {
     loading: protocolLoading,
     error: protocolError,
     protocolCounts,
-  } = useProtocolPositions(walletAddr, network)
+  } = useProtocolPositions(walletAddr, "mainnet")
 
   console.log("[DeepSense] Wallet status:", { isWalletConnected, walletAddr, livePositionsCount: positions.length, isLoadingBalances })
   const riskEvents = generateRiskEvents(positions)
@@ -2353,7 +2353,15 @@ export default function DeepSenseClientPage() {
               <Card>
                 <div style={{ padding: "14px 16px", borderBottom: `1px solid ${C.border}`, display: "flex", justifyContent: "space-between", alignItems: "center" }}>
                   <div>
-                    <Glow size={11} style={{ letterSpacing: 3, display: "block", marginBottom: 3 }}>PROTOCOL POSITIONS</Glow>
+                    <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 3 }}>
+                      <Glow size={11} style={{ letterSpacing: 3 }}>PROTOCOL POSITIONS</Glow>
+                      <span style={{
+                        fontFamily: MONO, fontSize: 8, letterSpacing: 2,
+                        padding: "2px 7px", borderRadius: 2,
+                        border: `1px solid ${C.safe}44`, color: C.safe,
+                        background: C.safe + "0d",
+                      }}>LIVE MAINNET</span>
+                    </div>
                     <span style={{ fontFamily: SANS, fontSize: 12, color: C.mutedHi }}>
                       Navi · Scallop · Cetus · Bluefin · SuiLend · DeepBook · 8 protocols scanned
                     </span>
