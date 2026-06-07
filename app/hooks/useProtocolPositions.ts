@@ -99,13 +99,16 @@ async function fetchNaviPositions(
   network: string,
 ): Promise<ProtocolPosition[]> {
   try {
-    const { AccountManager } = await import("navi-sdk");
-    // AccountManager without a mnemonic issues read-only RPC calls — no signing.
-    const am = new (AccountManager as any)({
-      network: network === "mainnet" ? "mainnet" : "testnet",
+    const { NAVISDKClient } = await import("navi-sdk");
+    // NAVISDKClient auto-generates a throwaway mnemonic internally.
+    // The generated account is never used for signing — getNAVIPortfolio(address)
+    // is a read-only RPC query against the shared Navi Storage object.
+    const client = new (NAVISDKClient as any)({
+      networkType:      network === "mainnet" ? "mainnet" : "testnet",
+      numberOfAccounts: 1,
     });
     const portfolio: Map<string, { borrowBalance: number; supplyBalance: number }> =
-      await am.getNAVIPortfolio(address, false);
+      await client.accounts[0].getNAVIPortfolio(address, false);
 
     const results: ProtocolPosition[] = [];
     portfolio.forEach(({ supplyBalance, borrowBalance }, assetKey: string) => {
@@ -135,7 +138,7 @@ async function fetchNaviPositions(
     });
     return results;
   } catch (e) {
-    console.warn("[useProtocolPositions] Navi SDK:", e);
+    console.error("[useProtocolPositions] Navi SDK error:", e);
     return [];
   }
 }
