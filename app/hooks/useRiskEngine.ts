@@ -34,7 +34,30 @@ type UseRiskEngineParams = {
   policyState: PolicyState | null;
   enabled: boolean;
   walletConnected: boolean;
+  demoMode?: boolean;
 };
+
+// ─── Demo mode ───────────────────────────────────────────────────────────────
+// Overrides live prices to simulate a correlated market crash.
+// All scoring logic runs unchanged — the reasons array is realistic.
+const DEMO_OVERRIDES: Record<string, { chg: number; usd?: number }> = {
+  sui:        { chg: -15 },
+  ethereum:   { chg: -12 },
+  bitcoin:    { chg: -9  },
+  tether:     { chg: -3, usd: 0.97 },
+  "usd-coin": { chg: 0 },
+};
+
+function applyDemoMode(base: PriceMap): PriceMap {
+  const result = { ...base };
+  for (const [key, override] of Object.entries(DEMO_OVERRIDES)) {
+    result[key] = {
+      usd: override.usd ?? base[key]?.usd ?? 1,
+      chg: override.chg,
+    };
+  }
+  return result;
+}
 
 // ─── Helpers ────────────────────────────────────────────────────────────────
 
@@ -154,6 +177,7 @@ export function useRiskEngine({
   policyState,
   enabled,
   walletConnected,
+  demoMode = false,
 }: UseRiskEngineParams) {
   const [riskAssessment, setRiskAssessment] = useState<RiskAssessment | null>(null);
   const [actionLog, setActionLog]           = useState<ActionLogEntry[]>([]);
@@ -175,19 +199,25 @@ export function useRiskEngine({
     return base;
   })();
 
-  // Stable dep key — only changes when merged values change.
-  const pricesKey = JSON.stringify(mergedPrices);
+  // In demo mode, override prices with a simulated crash scenario.
+  // calculateRiskScore runs unchanged — reasons look realistic.
+  const effectivePrices: PriceMap | null = demoMode && mergedPrices
+    ? applyDemoMode(mergedPrices)
+    : mergedPrices;
+
+  // Dep key changes when prices or demo toggle changes.
+  const effectiveKey = (demoMode ? "demo|" : "") + JSON.stringify(effectivePrices);
 
   useEffect(() => {
-    if (!enabled || !mergedPrices) return;
+    if (!enabled || !effectivePrices) return;
 
     // Push snapshot (cap at 10)
     priceHistory.current = [
       ...priceHistory.current,
-      { prices: mergedPrices, ts: Date.now() },
+      { prices: effectivePrices, ts: Date.now() },
     ].slice(-10);
 
-    const { score, level, reasons } = calculateRiskScore(mergedPrices, priceHistory.current);
+    const { score, level, reasons } = calculateRiskScore(effectivePrices, priceHistory.current);
 
     // Only update state when score actually changes to avoid unnecessary renders.
     setRiskAssessment((prev) => {
@@ -218,11 +248,11 @@ export function useRiskEngine({
         return [{ action: pauseAction, score, timestamp: Date.now() }, ...prev].slice(0, 50);
       });
     }
-  // pricesKey is the stable dep — prices itself is read via closure inside the effect.
+  // effectiveKey is the stable dep — includes demoMode prefix so toggling demo re-runs scorer.
   // policyState and walletConnected are intentionally omitted; they are snapshot-read
   // to avoid re-running the scorer on every 10s guardian refetch.
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [pricesKey, enabled]);
+  }, [effectiveKey, enabled]);
 
   return {
     riskAssessment,
