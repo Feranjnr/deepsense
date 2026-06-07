@@ -9,6 +9,8 @@ import { useRiskEngine } from "@/app/hooks/useRiskEngine"
 import { usePythPrices } from "@/app/hooks/usePythPrices"
 import { useProtocolPositions, type ProtocolPosition } from "@/app/hooks/useProtocolPositions"
 import { RISK_GUARDIAN } from "@/app/config/contracts"
+import { RiskGauge } from "@/app/components/RiskGauge"
+import { DecisionPipeline } from "@/app/components/DecisionPipeline"
 
 // ─── DESIGN TOKENS ─────────────────────────────────────────────────────────────
 const C = {
@@ -36,6 +38,20 @@ const fmt = {
 }
 function healthColor(h: number) { return h >= 80 ? C.safe : h >= 50 ? C.warn : C.danger }
 function sevColor(s: string)     { return s === "HIGH" ? C.danger : s === "MEDIUM" ? C.warn : C.accent }
+function riskLevelColor(level?: string) {
+  if (level === "CRITICAL") return C.danger
+  if (level === "HIGH")     return C.warn
+  if (level === "MEDIUM")   return C.gold
+  return C.accent  // LOW / undefined
+}
+function fmtAgo(ts: number | undefined, now: number): string {
+  if (!ts) return "—"
+  const s = Math.floor((now - ts) / 1000)
+  if (s < 5)    return "just now"
+  if (s < 60)   return `${s}s ago`
+  if (s < 3600) return `${Math.floor(s / 60)}m ago`
+  return `${Math.floor(s / 3600)}h ago`
+}
 
 // ─── NETWORK TAGS ──────────────────────────────────────────────────────────────
 const NET = {
@@ -181,6 +197,39 @@ function HealthBar({ value, style }: { value: number; style?: any }) {
     </div>
   )
 }
+function Skeleton({ w = "100%", h = 14, style }: { w?: string|number; h?: number; style?: any }) {
+  return <div className="ds-skeleton" style={{ width: w, height: h, ...style }} />
+}
+function SkeletonCard({ lines = 2, style }: { lines?: number; style?: any }) {
+  return (
+    <Card style={{ padding: "16px 18px", ...style }}>
+      <Skeleton h={8} w="42%" style={{ marginBottom: 12 }} />
+      {Array.from({ length: lines }, (_, i) => (
+        <Skeleton key={i} h={i === 0 ? 22 : 11} w={i === 0 ? "68%" : "44%"}
+          style={{ marginBottom: i < lines - 1 ? 8 : 0 }} />
+      ))}
+    </Card>
+  )
+}
+function ErrorBanner({ message, onRetry }: { message: string; onRetry?: () => void }) {
+  return (
+    <div style={{
+      display: "flex", alignItems: "center", gap: 12,
+      padding: "10px 16px", marginBottom: 14,
+      background: C.danger + "0a", border: `1px solid ${C.danger}33`, borderRadius: 6,
+    }}>
+      <span style={{ color: C.danger, fontSize: 14, flexShrink: 0 }}>⚠</span>
+      <span style={{ fontFamily: SANS, fontSize: 12, color: C.text, flex: 1 }}>{message}</span>
+      {onRetry && (
+        <button onClick={onRetry} style={{
+          fontFamily: MONO, fontSize: 10, padding: "4px 10px", letterSpacing: 1,
+          background: C.danger + "18", border: `1px solid ${C.danger}44`,
+          color: C.danger, borderRadius: 3, cursor: "pointer", flexShrink: 0,
+        }}>RETRY</button>
+      )}
+    </div>
+  )
+}
 function Pill({ label, active, onClick, color = C.accent }: any) {
   return <button onClick={onClick} style={{
     fontFamily: MONO, fontSize: 11, padding: "5px 14px",
@@ -279,11 +328,13 @@ function PortfolioOverview({ positions, walletConnected }: any) {
     },
   ]
   return (
-    <div style={{ display: "grid", gridTemplateColumns: "repeat(4,1fr)", gap: 10, marginBottom: 16 }}>
+    <div className="ds-metric-grid">
       {stats.map((s: any) => (
         <Card key={s.label} style={{ padding: "16px 18px" }}>
           <div style={{ fontFamily: MONO, fontSize: 9, color: C.muted, letterSpacing: 3, marginBottom: 8 }}>{s.label}</div>
-          <Glow color={s.color} size={24} weight={700}>{s.value}</Glow>
+          <Glow color={s.color} size={24} weight={700}>
+            <span key={s.value} className="ds-num-pop">{s.value}</span>
+          </Glow>
           <div style={{ fontFamily: SANS, fontSize: 11, color: C.mutedHi, marginTop: 5 }}>{s.sub}</div>
         </Card>
       ))}
@@ -621,11 +672,12 @@ Be precise and educational. Format with clear headers.`
 }
 
 // ─── AI ADVISOR CHAT ────────────────────────────────────────────────────────────
-function AIAdvisor({ positions, pools, groqKey }: any) {
+function AIAdvisor({ positions, pools, groqKey, riskAssessment, policyState, protocolPositions }: any) {
   const hasPositions = positions.length > 0
+  const riskLevel = riskAssessment?.level
   const [messages, setMessages] = useState<{role:"assistant"|"user";text:string}[]>([
     { role: "assistant", text: hasPositions
-        ? "Hello. I'm DeepSense — your AI risk advisor for Sui DeFi. I have visibility into your on-chain positions. Ask me anything about your portfolio, risk exposure, or market conditions."
+        ? `Hello. I'm DeepSense — your AI risk advisor for Sui DeFi. I have visibility into your on-chain positions${riskLevel && riskLevel !== "LOW" ? ` and the live risk engine is showing a ${riskLevel} alert` : ""}. Ask me anything about your portfolio, risk exposure, or market conditions.`
         : "Hello. I'm DeepSense — your AI risk advisor for Sui DeFi. No wallet is connected yet, so I'll provide general DeFi and Sui risk advice. Connect your wallet for personalized portfolio analysis."
     }
   ])
@@ -651,23 +703,56 @@ function AIAdvisor({ positions, pools, groqKey }: any) {
     setLoading(true)
 
     const hasPositions = positions.length > 0
-    const context = `You are DeepSense, an elite AI DeFi risk advisor for the Sui blockchain and DeepBook CLOB.
+    const ra = riskAssessment
+    const ps = policyState
+    const pp: any[] = protocolPositions ?? []
 
-${hasPositions
-  ? `Current portfolio:\n${positions.map((p: any) =>
-      `- ${p.type} ${p.asset} on ${p.protocol}: $${p.size} size, ${p.leverage}x leverage, Health ${p.health}%, PnL $${p.pnl} (${p.pnlPct}%), Liquidation: $${p.liquidationPrice ?? "none"}`
-    ).join("\n")}`
-  : "No wallet connected — user has not loaded a portfolio. Provide general Sui DeFi risk advice."
+    const context = `You are DeepSense, an AI risk advisor embedded in a real-time Sui DeFi monitoring dashboard.
+
+## LIVE RISK ENGINE
+${ra
+  ? `Risk Score: ${ra.score}/100 | Level: ${ra.level}
+${ra.reasons.length > 0
+  ? `Active risk factors:\n${ra.reasons.map((r: string) => `• ${r}`).join("\n")}`
+  : "No elevated risk factors detected."
+}`
+  : "Risk engine initialising — prices loading."
 }
 
+## ON-CHAIN GUARDIAN POLICY
+${ps
+  ? `Protocol status: ${ps.is_paused ? "PAUSED — AI agent has suspended operations" : "ACTIVE"}
+AI agent: ${ps.agent_active ? "Enabled" : "Disabled / revoked"}
+Max leverage: ${(ps.max_leverage / 100).toFixed(1)}x | Liquidation threshold: ${(ps.liquidation_threshold / 100).toFixed(1)}%
+On-chain risk score: ${ps.risk_score}/100 | Actions taken: ${ps.total_actions} | Budget remaining: ${ps.actions_remaining}/${ps.max_actions}`
+  : "Guardian policy not yet loaded."
+}
+
+## USER COIN BALANCES (Sui Mainnet)
+${hasPositions
+  ? positions.map((p: any) =>
+      `- ${p.asset}: $${p.size.toFixed(2)} value${p.leverage > 1 ? `, ${p.leverage}x leverage` : ""}, Health ${p.health}%${p.liquidationPrice ? `, Liquidation $${p.liquidationPrice}` : ""}, PnL $${p.pnl.toFixed(2)} (${p.pnlPct.toFixed(1)}%)`
+    ).join("\n")
+  : "No wallet connected — provide general Sui DeFi advice."
+}
+
+## DETECTED ON-CHAIN DEFI POSITIONS (${pp.length} found across protocols)
+${pp.length > 0
+  ? pp.map((p: any) =>
+      `- ${p.protocol} ${p.type} ${p.asset}${p.details?.balance ? ` | balance: ${p.details.balance}` : ""}${p.details?.liquidity ? ` | liquidity: ${p.details.liquidity}` : ""}${p.details?.coinTypeA ? ` | pair: ${p.details.coinTypeA.split("::").pop()}/${(p.details.coinTypeB ?? "").split("::").pop()}` : ""}`
+    ).join("\n")
+  : "No active DeFi positions detected on-chain."
+}
+
+## LIVE MARKET PRICES (DeepBook pools)
 ${pools.length > 0
-  ? `DeepBook pools (live prices, simulated depth):\n${pools.map((p: any) =>
+  ? pools.map((p: any) =>
       `- ${p.base}/${p.quote}: ${fmt.usd(p.price)} (${fmt.pct(p.change)}), Spread ${p.spread}%`
-    ).join("\n")}`
+    ).join("\n")
   : "Market price data loading."
 }
 
-Be conversational but precise. ${hasPositions ? "Use specific numbers from the portfolio." : "Answer general DeFi and Sui questions."} Keep responses under 200 words. Give actionable advice. You understand Sui's object model, Move contracts, and DeepBook's CLOB mechanics.`
+Answer grounded in THIS user's specific situation. Reference their actual assets, protocol positions, and risk factors by name. When policy is paused or score is HIGH/CRITICAL, highlight urgency and concrete steps. Be conversational but precise. Keep responses under 200 words. You understand Sui's object model, Move contracts, and DeepBook CLOB mechanics.`
 
     try {
       const res = await fetch("/api/advisor", {
@@ -999,6 +1084,7 @@ function generateRiskEvents(positions: any[]): any[] {
 // ─── ROOT APP ──────────────────────────────────────────────────────────────────
 export default function DeepSenseClientPage() {
   const [tab, setTab]               = useState("dashboard")
+  const [moreOpen, setMoreOpen]     = useState(false)
   const [network, setNetwork]       = useState("mainnet")
   // ── live wallet state ──
   const currentAccount       = useCurrentAccount()
@@ -1008,11 +1094,13 @@ export default function DeepSenseClientPage() {
   // ── raw balances (re-fetched on wallet/network change) ──
   const [rawBalances, setRawBalances] = useState<Array<{coinType: string; rawAmt: number; symbol: string; decimals: number}>>([])
   const [isLoadingBalances, setIsLoadingBalances] = useState(false)
+  const [balanceError, setBalanceError] = useState<string | null>(null)
 
   // Fetch raw coin balances when wallet or network changes
   useEffect(() => {
-    if (!walletAddr || !suiClient) { setRawBalances([]); return }
+    if (!walletAddr || !suiClient) { setRawBalances([]); setBalanceError(null); return }
     setIsLoadingBalances(true)
+    setBalanceError(null)
     let cancelled = false
     ;(async () => {
       try {
@@ -1031,9 +1119,9 @@ export default function DeepSenseClientPage() {
         }
         console.log("[DeepSense] Processed positions:", fetched.length, fetched)
         if (!cancelled) setRawBalances(fetched)
-      } catch (err) {
-        console.log("[DeepSense] getAllBalances error:", err)
-        console.warn("getAllBalances failed — staying on mock data for this session")
+      } catch (err: any) {
+        console.error("[DeepSense] getAllBalances error:", err)
+        if (!cancelled) setBalanceError(err?.message ?? "Failed to load balances from Sui RPC")
       } finally {
         if (!cancelled) setIsLoadingBalances(false)
       }
@@ -1042,8 +1130,8 @@ export default function DeepSenseClientPage() {
   }, [walletAddr, suiClient, network])
 
   // ── computed props passed to child components ──
-  const { pools, prices }  = useCoinGeckoPrices()
-  const { pythPrices, loading: pythLoading } = usePythPrices()
+  const { pools, prices, loading: cgLoading } = useCoinGeckoPrices()
+  const { pythPrices, loading: pythLoading, error: pythError } = usePythPrices()
   // Derive coin-balance positions from raw balances + live prices
   const positions: RpcPosition[] = rawBalances
     .map((b, i) => coinToPosition(b.coinType, b.rawAmt, b.decimals, b.symbol, i, prices))
@@ -1063,6 +1151,18 @@ export default function DeepSenseClientPage() {
   const [selectedPos, setSelectedPos] = useState<any>(null)
   const [selectedPool, setSelectedPool] = useState<any>(null)
   const [groqKey] = useState("")
+  const [demoMode, setDemoMode] = useState(false)
+  const [nowMs, setNowMs] = useState(Date.now())
+  useEffect(() => {
+    const t = setInterval(() => setNowMs(Date.now()), 1000)
+    return () => clearInterval(t)
+  }, [])
+
+  // ── Decision Pipeline state ──
+  const [pipelineStage, setPipelineStage]       = useState(-1)
+  const [pipelineTxDigest, setPipelineTxDigest] = useState<string | undefined>()
+  const prevRiskScore = useRef(-1)
+  const prevActionLen = useRef(0)
 
   // ── Risk Guardian on-chain state ──
   const { policyState, events: guardianEvents, loading: guardianLoading, error: guardianError, refetch: refetchGuardian } = useRiskGuardian()
@@ -1072,9 +1172,41 @@ export default function DeepSenseClientPage() {
     policyState,
     enabled: true,
     walletConnected: isWalletConnected,
+    demoMode,
   })
   const { mutate: signAndExecute } = useSignAndExecuteTransaction()
   const [txStatus, setTxStatus] = useState<string>("")
+
+  // ── Pipeline effects (declared after riskAssessment / actionLog are in scope) ──
+  // Trigger pipeline when score crosses into HIGH/CRITICAL, reset when it drops to LOW
+  useEffect(() => {
+    if (!riskAssessment) return
+    const score = riskAssessment.score
+    const prev  = prevRiskScore.current
+    prevRiskScore.current = score
+    if (score >= 61 && prev < 61) {
+      setPipelineStage(0)
+      setPipelineTxDigest(undefined)
+    } else if (score < 31 && prev >= 31) {
+      setPipelineStage(s => s >= 0 && s < 3 ? -1 : s)
+      setPipelineTxDigest(d => d)           // preserve digest if already confirmed
+    }
+  }, [riskAssessment])
+
+  // Auto-advance stage 0 → 1 after a beat (score shown, engine re-computed)
+  useEffect(() => {
+    if (pipelineStage !== 0) return
+    const t = setTimeout(() => setPipelineStage(s => s === 0 ? 1 : s), 1100)
+    return () => clearTimeout(t)
+  }, [pipelineStage])
+
+  // Advance to stage 2 when a new action appears in the action log
+  useEffect(() => {
+    if (actionLog.length > prevActionLen.current) {
+      prevActionLen.current = actionLog.length
+      setPipelineStage(s => (s === 0 || s === 1) ? 2 : s)
+    }
+  }, [actionLog.length])
 
   function setTxMsg(msg: string) {
     setTxStatus(msg)
@@ -1174,30 +1306,32 @@ export default function DeepSenseClientPage() {
   }, [])
 
   const net = NET[network as keyof typeof NET]
+  const isCritical = riskAssessment?.level === "CRITICAL"
 
   return (
     <div style={{ minHeight: "100vh", background: C.bg, color: C.text }}>
-      <style>{`
-        * { box-sizing: border-box; margin: 0; padding: 0; }
-        @import url('https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;600;700&family=IBM+Plex+Sans:wght@400;600;700&display=swap');
-        ::-webkit-scrollbar { width: 4px; height: 4px; }
-        ::-webkit-scrollbar-track { background: ${C.bg}; }
-        ::-webkit-scrollbar-thumb { background: ${C.borderHi}; border-radius: 2px; }
-        input[type=range] { appearance: none; height: 3px; border-radius: 2px; background: ${C.border}; outline: none; }
-        input[type=range]::-webkit-slider-thumb { appearance: none; width: 14px; height: 14px; border-radius: 50%; cursor: pointer; }
-        @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:0.3} }
-        @keyframes fadeUp { from{opacity:0;transform:translateY(8px)} to{opacity:1;transform:translateY(0)} }
-        button:hover { opacity: 0.85; }
-      `}</style>
+      {/* Critical viewport glow — fixed overlay, pointer-events:none, fades in/out */}
+      <div style={{
+        position: "fixed", inset: 0, pointerEvents: "none", zIndex: 9999,
+        opacity: isCritical ? 1 : 0,
+        transition: "opacity 1.6s ease",
+      }}>
+        <div style={{
+          position: "absolute", inset: 0,
+          animation: "critical-pulse 2.8s ease-in-out infinite",
+        }} />
+      </div>
 
       {/* Header */}
       <div style={{
-        borderBottom: `1px solid ${C.border}`, padding: "0 24px",
-        background: C.surface, display: "flex", alignItems: "center", gap: 0,
+        borderBottom: `1px solid ${C.border}`,
+        background: C.surface, display: "flex", alignItems: "center",
+        flexWrap: "wrap", padding: "0 24px", gap: 0, minWidth: 0,
       }}>
+        {/* Logo — stays pinned left, never shrinks */}
         <div style={{
-          padding: "14px 0", marginRight: 32, borderRight: `1px solid ${C.border}`,
-          paddingRight: 24,
+          padding: "14px 0", marginRight: 24, borderRight: `1px solid ${C.border}`,
+          paddingRight: 24, flexShrink: 0,
         }}>
           <div style={{ display: "flex", alignItems: "baseline", gap: 4 }}>
             <Glow size={18} weight={800} style={{ letterSpacing: 4 }}>DEEP</Glow>
@@ -1207,27 +1341,77 @@ export default function DeepSenseClientPage() {
             AI · SUI · DEEPBOOK
           </div>
         </div>
-        <div style={{ display: "flex", gap: 0, flex: 1 }}>
+        {/* Tab bar — scrolls horizontally on narrow viewports */}
+        <div className="ds-tabbar">
           {[
-            { id: "dashboard",    label: "DASHBOARD"   },
-            { id: "guardian",     label: "GUARDIAN"    },
-            { id: "positions",   label: "POSITIONS"   },
-            { id: "deepbook",    label: "DEEPBOOK"    },
-            { id: "advisor",     label: "AI ADVISOR"  },
-            { id: "simulator",   label: "SIMULATOR"   },
-            { id: "architecture",label: "ARCHITECTURE"},
+            { id: "dashboard", label: "DASHBOARD"  },
+            { id: "guardian",  label: "GUARDIAN"   },
+            { id: "positions", label: "POSITIONS"  },
+            { id: "advisor",   label: "AI ADVISOR" },
           ].map(t => (
-            <button key={t.id} onClick={() => setTab(t.id)} style={{
-              fontFamily: MONO, fontSize: 11, padding: "20px 18px",
-              background: "none", border: "none",
+            <button key={t.id} onClick={() => { setTab(t.id); setMoreOpen(false) }} style={{
+              fontFamily: MONO, fontSize: 11, padding: "18px 14px",
+              background: "none", border: "none", flexShrink: 0,
               borderBottom: tab === t.id ? `2px solid ${C.accent}` : "2px solid transparent",
               color: tab === t.id ? C.accent : C.muted, cursor: "pointer",
-              letterSpacing: 2, transition: "all 0.2s",
+              letterSpacing: 1, transition: "all 0.2s",
               textShadow: tab === t.id ? `0 0 8px ${C.accent}` : "none",
             }}>{t.label}</button>
           ))}
+
+          {/* ── More dropdown ─────────────────────────────────────────────── */}
+          {(() => {
+            const MORE_TABS = [
+              { id: "deepbook",     label: "DEEPBOOK"  },
+              { id: "simulator",    label: "SIMULATOR" },
+              { id: "architecture", label: "ARCHITECT" },
+            ]
+            const moreActive = MORE_TABS.some(t => t.id === tab)
+            const btnColor = (moreActive || moreOpen) ? C.accent : C.muted
+            return (
+              <div style={{ position: "relative", flexShrink: 0 }}>
+                <button
+                  onClick={() => setMoreOpen(o => !o)}
+                  style={{
+                    fontFamily: MONO, fontSize: 11, padding: "18px 14px",
+                    background: "none", border: "none",
+                    borderBottom: (moreActive || moreOpen) ? `2px solid ${C.accent}` : "2px solid transparent",
+                    color: btnColor, cursor: "pointer", letterSpacing: 1,
+                    transition: "all 0.2s",
+                    textShadow: (moreActive || moreOpen) ? `0 0 8px ${C.accent}` : "none",
+                  }}
+                >
+                  MORE {moreOpen ? "▴" : "▾"}
+                </button>
+                {moreOpen && (
+                  <div style={{
+                    position: "absolute", top: "100%", left: 0, zIndex: 200,
+                    background: C.card, border: `1px solid ${C.borderHi}`,
+                    borderRadius: 4, minWidth: 148,
+                    boxShadow: "0 8px 24px rgba(0,0,0,0.55)",
+                    overflow: "hidden",
+                  }}>
+                    {MORE_TABS.map((t, i) => (
+                      <button key={t.id} onClick={() => { setTab(t.id); setMoreOpen(false) }} style={{
+                        display: "block", width: "100%", textAlign: "left",
+                        fontFamily: MONO, fontSize: 11, padding: "11px 16px",
+                        background: tab === t.id ? C.accent + "14" : "none",
+                        border: "none",
+                        borderBottom: i < MORE_TABS.length - 1 ? `1px solid ${C.border}` : "none",
+                        color: tab === t.id ? C.accent : C.text,
+                        cursor: "pointer", letterSpacing: 1, transition: "background 0.15s",
+                      }}>{t.label}</button>
+                    ))}
+                  </div>
+                )}
+              </div>
+            )
+          })()}
         </div>
-        <NetBadge phase={network} />
+        {/* Net badge — shrinks away on very small screens */}
+        <div style={{ flexShrink: 0, paddingLeft: 12 }}>
+          <NetBadge phase={network} />
+        </div>
       </div>
 
       {/* Wallet Bar */}
@@ -1238,12 +1422,186 @@ export default function DeepSenseClientPage() {
 
       {/* API key bar hidden — key read from GROQ_API_KEY env var server-side */}
 
+      {/* ─── STATUS BANNER ─────────────────────────────────────────────────────── */}
+      {(() => {
+        const lvl   = riskAssessment?.level
+        const score = riskAssessment?.score ?? 0
+        const dot   = riskLevelColor(lvl)
+        const lastAction = actionLog[0]?.timestamp
+        return (
+          <div style={{
+            background: C.surface,
+            borderBottom: `1px solid ${C.border}`,
+            padding: "0 24px",
+            minHeight: 34,
+            display: "flex", alignItems: "center", gap: 0,
+            fontSize: 10, fontFamily: MONO,
+            overflowX: "auto", whiteSpace: "nowrap",
+            scrollbarWidth: "none",
+          }}>
+            {/* Live dot — breathes gently always, faster when elevated */}
+            <span style={{
+              display: "inline-block", width: 7, height: 7, borderRadius: "50%",
+              background: dot, boxShadow: `0 0 8px ${dot}`,
+              flexShrink: 0, marginRight: 14,
+              animation: `dot-breathe ${score >= 86 ? 1.4 : score >= 61 ? 2 : 3.5}s ease-in-out infinite`,
+            }} />
+
+            {/* Positions */}
+            <span style={{ color: C.muted, marginRight: 5 }}>MONITORING</span>
+            <span style={{ color: C.text, marginRight: 14 }}>{positions.length} position{positions.length !== 1 ? "s" : ""}</span>
+
+            <span style={{ color: C.border, marginRight: 14, userSelect: "none" }}>│</span>
+
+            {/* Risk score + level — number pops when score changes */}
+            <span style={{ color: C.muted, marginRight: 5 }}>RISK</span>
+            <span key={score} className="ds-num-pop" style={{ color: dot, marginRight: 3 }}>{score}</span>
+            <span style={{ color: C.muted, marginRight: 5 }}>/100</span>
+            <span key={lvl} style={{
+              color: dot, letterSpacing: 1,
+              padding: "1px 6px",
+              border: `1px solid ${dot}44`,
+              borderRadius: 2,
+              background: dot + "10",
+              marginRight: 14,
+              fontSize: 9,
+              transition: "color 0.6s ease, border-color 0.6s ease, background 0.6s ease",
+            }}>{lvl ?? "—"}</span>
+
+            <span style={{ color: C.border, marginRight: 14, userSelect: "none" }}>│</span>
+
+            {/* Last AI action */}
+            <span style={{ color: C.muted, marginRight: 5 }}>LAST AI ACTION</span>
+            <span style={{ color: lastAction ? C.text : C.muted }}>{fmtAgo(lastAction, nowMs)}</span>
+
+            {/* Spacer */}
+            <div style={{ flex: 1 }} />
+
+            {/* Demo indicator — repeat here so it's visible on all tabs */}
+            {demoMode && (
+              <span style={{
+                color: C.danger, letterSpacing: 2, fontSize: 9,
+                animation: "pulse 1.4s ease-in-out infinite",
+              }}>● CRASH SIM ACTIVE</span>
+            )}
+          </div>
+        )
+      })()}
+
       {/* ─── MAIN CONTENT ─────────────────────────────────────────────────────── */}
-      <div style={{ padding: "20px 24px" }} key={tab}>
+      <div className="ds-tab-content" style={{ padding: "20px 24px" }} key={tab}>
 
         {/* DASHBOARD TAB */}
         {tab === "dashboard" && (
           <>
+            {/* ── Risk Gauge centerpiece + demo toggle ── */}
+            <div style={{
+              position: "relative", display: "flex", justifyContent: "center", marginBottom: 8,
+              animation: isCritical ? "gauge-pulse 2.8s ease-in-out infinite" : "none",
+              transformOrigin: "center center",
+            }}>
+              <RiskGauge
+                score={riskAssessment?.score ?? 0}
+                level={riskAssessment?.level ?? "—"}
+              />
+              {/* Demo controls — top-right of the gauge area */}
+              <div style={{
+                position: "absolute", top: 0, right: 0,
+                display: "flex", alignItems: "center", gap: 8,
+              }}>
+                {demoMode && (
+                  <span style={{
+                    fontFamily: MONO, fontSize: 9, color: C.danger,
+                    letterSpacing: 2, opacity: 0.8,
+                    animation: "pulse 1.4s ease-in-out infinite",
+                  }}>● SIMULATING</span>
+                )}
+                <button
+                  onClick={() => setDemoMode(d => !d)}
+                  style={{
+                    fontFamily: MONO, fontSize: 10, letterSpacing: 1,
+                    padding: "5px 12px",
+                    background: demoMode ? C.danger + "18" : "transparent",
+                    border: `1px solid ${demoMode ? C.danger + "66" : C.border}`,
+                    color: demoMode ? C.danger : C.muted,
+                    borderRadius: 3, cursor: "pointer",
+                    transition: "all 0.25s",
+                  }}
+                >
+                  {demoMode ? "RESET" : "SIMULATE CRASH"}
+                </button>
+              </div>
+            </div>
+
+            {/* ── Risk factors list ── */}
+            {(() => {
+              const reasons = riskAssessment?.reasons ?? []
+              const color   = riskLevelColor(riskAssessment?.level)
+              const hasFacts = reasons.length > 0
+              return (
+                <div style={{ maxWidth: 540, margin: "0 auto 24px" }}>
+                  {hasFacts ? (
+                    <div style={{
+                      background: C.card,
+                      border: `1px solid ${color}30`,
+                      borderRadius: 6,
+                      overflow: "hidden",
+                    }}>
+                      {/* Header */}
+                      <div style={{
+                        padding: "8px 14px",
+                        borderBottom: `1px solid ${C.border}`,
+                        display: "flex", alignItems: "center", gap: 8,
+                      }}>
+                        <span style={{ color: color, fontSize: 11 }}>⚠</span>
+                        <span style={{ fontFamily: MONO, fontSize: 9, color: color, letterSpacing: 3 }}>FLAGGED FACTORS</span>
+                        <span style={{ fontFamily: MONO, fontSize: 9, color: C.muted }}>·</span>
+                        <span style={{ fontFamily: MONO, fontSize: 9, color: C.muted }}>{reasons.length} active</span>
+                      </div>
+                      {/* Reasons */}
+                      {reasons.map((reason, i) => (
+                        <div key={i} style={{
+                          display: "flex", alignItems: "center", gap: 10,
+                          padding: "9px 14px",
+                          borderBottom: i < reasons.length - 1 ? `1px solid ${C.border}` : "none",
+                        }}>
+                          <span style={{
+                            display: "inline-block", width: 18, height: 18, flexShrink: 0,
+                            borderRadius: "50%", background: color + "18",
+                            border: `1px solid ${color}40`,
+                            color, fontSize: 9, fontFamily: MONO, fontWeight: 700,
+                            textAlign: "center", lineHeight: "18px",
+                          }}>!</span>
+                          <span style={{ fontFamily: SANS, fontSize: 12, color: C.text, lineHeight: 1.4 }}>{reason}</span>
+                        </div>
+                      ))}
+                    </div>
+                  ) : (
+                    <div style={{
+                      background: C.card,
+                      border: `1px solid ${C.safe}22`,
+                      borderRadius: 6,
+                      padding: "11px 16px",
+                      display: "flex", alignItems: "center", gap: 12,
+                    }}>
+                      <span style={{
+                        display: "inline-block", width: 22, height: 22, flexShrink: 0,
+                        borderRadius: "50%", background: C.safe + "18",
+                        border: `1px solid ${C.safe}44`,
+                        color: C.safe, fontSize: 12, textAlign: "center", lineHeight: "22px",
+                      }}>✓</span>
+                      <div>
+                        <span style={{ fontFamily: MONO, fontSize: 11, color: C.safe }}>All clear</span>
+                        <span style={{ fontFamily: SANS, fontSize: 11, color: C.muted, marginLeft: 8 }}>
+                          No elevated risk factors detected
+                        </span>
+                      </div>
+                    </div>
+                  )}
+                </div>
+              )
+            })()}
+
             {!isWalletConnected ? (
               /* ── Hero card when no wallet ── */
               <Card style={{
@@ -1256,7 +1614,7 @@ export default function DeepSenseClientPage() {
                     AI-powered risk monitoring for Sui DeFi · Real-time oracle feeds · On-chain guardian contract
                   </div>
                 </div>
-                <div style={{ display: "grid", gridTemplateColumns: "repeat(3,1fr)", gap: 16, maxWidth: 600, margin: "28px auto 32px" }}>
+                <div className="ds-feature-grid">
                   {[
                     { icon: "◈", title: "Live Oracle Prices", sub: "Pyth Network + CoinGecko" },
                     { icon: "⬡", title: "AI Risk Engine", sub: "Automated scoring & alerts" },
@@ -1286,26 +1644,61 @@ export default function DeepSenseClientPage() {
             ) : (
               /* ── Portfolio view when wallet connected ── */
               <>
-                <PortfolioOverview positions={positions} walletConnected={isWalletConnected} />
-                {isLoadingBalances && (
-                  <Card style={{ padding: 20, textAlign: "center", border: `1px solid ${C.borderHi}`, marginBottom: 14 }}>
-                    <div style={{ fontFamily: MONO, fontSize: 13, color: C.accent, animation: "pulse 1.2s infinite" }}>
-                      FETCHING ON-CHAIN BALANCES…
-                    </div>
-                  </Card>
+                {/* Errors surface here — never a blank screen */}
+                {balanceError && (
+                  <ErrorBanner
+                    message={`Sui RPC error: ${balanceError}`}
+                    onRetry={() => { setBalanceError(null); setIsLoadingBalances(true) }}
+                  />
                 )}
-                {!isLoadingBalances && positions.length === 0 && (
-                  <Card style={{ padding: 20, textAlign: "center", border: `1px solid ${C.safe}33`, marginBottom: 14 }}>
-                    <Glow size={13} color={C.safe} style={{ display: "block", marginBottom: 8 }}>WALLET CONNECTED ✓</Glow>
-                    <div style={{ fontFamily: SANS, fontSize: 12, color: C.text, marginBottom: 4 }}>
-                      Address: <span style={{ fontFamily: MONO, color: C.accent }}>{fmt.addr(walletAddr)}</span>
+                {pythError && !pythLoading && (
+                  <ErrorBanner message={`Pyth oracle unavailable — prices may be stale: ${pythError}`} />
+                )}
+                {/* Skeleton metric cards while balances load */}
+                {isLoadingBalances ? (
+                  <>
+                    <div className="ds-metric-grid" style={{ marginBottom: 16 }}>
+                      {[1,2,3,4].map(i => <SkeletonCard key={i} lines={2} />)}
                     </div>
-                    <div style={{ fontFamily: SANS, fontSize: 11, color: C.muted }}>No coin balances found on this address.</div>
-                  </Card>
+                    <Card style={{ padding: "16px 18px", marginBottom: 14 }}>
+                      <Skeleton h={10} w="30%" style={{ marginBottom: 14 }} />
+                      {[1,2,3].map(i => (
+                        <div key={i} style={{ display: "flex", gap: 12, marginBottom: 12, alignItems: "center" }}>
+                          <Skeleton h={12} w={48} style={{ flexShrink: 0 }} />
+                          <Skeleton h={12} w="60%" />
+                          <Skeleton h={12} w="15%" />
+                        </div>
+                      ))}
+                    </Card>
+                  </>
+                ) : (
+                  <>
+                    <PortfolioOverview positions={positions} walletConnected={isWalletConnected} />
+                    {positions.length === 0 && !balanceError && (
+                      <Card style={{ padding: "20px 24px", marginBottom: 14, border: `1px solid ${C.safe}22` }}>
+                        <div style={{ display: "flex", alignItems: "center", gap: 14 }}>
+                          <span style={{
+                            width: 32, height: 32, borderRadius: "50%", flexShrink: 0,
+                            background: C.safe + "18", border: `1px solid ${C.safe}44`,
+                            display: "flex", alignItems: "center", justifyContent: "center",
+                            color: C.safe, fontSize: 14,
+                          }}>✓</span>
+                          <div>
+                            <div style={{ fontFamily: MONO, fontSize: 11, color: C.safe, marginBottom: 3 }}>
+                              WALLET CONNECTED · {fmt.addr(walletAddr)}
+                            </div>
+                            <div style={{ fontFamily: SANS, fontSize: 12, color: C.muted }}>
+                              No coin balances found on this address yet. Deposit SUI or supported tokens to begin monitoring.
+                            </div>
+                          </div>
+                        </div>
+                      </Card>
+                    )}
+                  </>
                 )}
               </>
             )}
-            <div style={{ display: "grid", gridTemplateColumns: "1fr 340px", gap: 14 }}>
+            <div className="ds-side-grid">
               <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
                 <PositionTable positions={positions} onSelect={setSelectedPos} selected={selectedPos} walletConnected={isWalletConnected} />
                 <RiskFeed events={riskEvents} walletConnected={isWalletConnected} />
@@ -1400,21 +1793,34 @@ export default function DeepSenseClientPage() {
           }
 
           if (guardianLoading) return (
-            <Card style={{ padding: 40, textAlign: "center" }}>
-              <div style={{ fontFamily: MONO, fontSize: 14, color: C.accent, animation: "pulse 1.2s infinite" }}>
-                READING ON-CHAIN STATE…
+            <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
+              <div style={{ display: "flex", alignItems: "center", gap: 10, padding: "6px 0" }}>
+                <span style={{ width: 8, height: 8, borderRadius: "50%", background: C.accent, boxShadow: `0 0 10px ${C.accent}`, display: "inline-block", animation: "dot-breathe 1.4s ease-in-out infinite" }} />
+                <span style={{ fontFamily: MONO, fontSize: 10, color: C.accent, letterSpacing: 2 }}>READING ON-CHAIN STATE…</span>
+                <span style={{ fontFamily: SANS, fontSize: 11, color: C.muted }}>Querying Sui Testnet · RiskGuardian contract</span>
               </div>
-              <div style={{ fontFamily: SANS, fontSize: 12, color: C.muted, marginTop: 10 }}>
-                Querying Sui Testnet · RiskGuardian contract
+              <div className="ds-metric-grid" style={{ marginBottom: 0 }}>
+                {[1,2,3,4].map(i => <SkeletonCard key={i} lines={2} />)}
               </div>
-            </Card>
+              <SkeletonCard lines={3} style={{ padding: "18px" }} />
+              <div className="ds-side-grid">
+                <SkeletonCard lines={5} />
+                <SkeletonCard lines={4} />
+              </div>
+            </div>
           )
 
           if (guardianError) return (
-            <Card style={{ padding: 24, border: `1px solid ${C.danger}44` }}>
-              <Glow color={C.danger} size={12} style={{ display: "block", marginBottom: 8 }}>CONTRACT READ ERROR</Glow>
-              <div style={{ fontFamily: MONO, fontSize: 11, color: C.mutedHi }}>{guardianError}</div>
-            </Card>
+            <div>
+              <ErrorBanner message={`RiskGuardian contract error: ${guardianError}`} onRetry={refetchGuardian} />
+              <Card style={{ padding: "32px 24px", textAlign: "center", border: `1px solid ${C.border}` }}>
+                <div style={{ fontFamily: MONO, fontSize: 24, color: C.muted, marginBottom: 12 }}>⛓</div>
+                <div style={{ fontFamily: MONO, fontSize: 12, color: C.muted, marginBottom: 6 }}>Could not reach the RiskGuardian contract</div>
+                <div style={{ fontFamily: SANS, fontSize: 12, color: C.muted }}>
+                  Check your network connection or try switching between Mainnet and Testnet above.
+                </div>
+              </Card>
+            </div>
           )
 
           if (!policyState) return (
@@ -1446,6 +1852,9 @@ export default function DeepSenseClientPage() {
                 }}>↺ REFRESH</button>
               </div>
 
+              {/* Decision Pipeline */}
+              <DecisionPipeline stage={pipelineStage} txDigest={pipelineTxDigest} />
+
               {/* AI RISK ENGINE panel */}
               <Card style={{ border: `1px solid ${C.accent}33`, background: C.accent+"05" }}>
                 <div style={{ padding: "14px 16px", borderBottom: `1px solid ${C.border}`, display: "flex", justifyContent: "space-between", alignItems: "center" }}>
@@ -1453,7 +1862,7 @@ export default function DeepSenseClientPage() {
                     <span style={{
                       width: 8, height: 8, borderRadius: "50%", background: C.safe,
                       boxShadow: `0 0 10px ${C.safe}`, display: "inline-block",
-                      animation: "pulse 2s infinite",
+                      animation: "dot-breathe 2.4s ease-in-out infinite",
                     }} />
                     <Glow size={11} style={{ letterSpacing: 3 }}>AI RISK ENGINE</Glow>
                   </div>
@@ -1496,7 +1905,7 @@ export default function DeepSenseClientPage() {
                               riskAssessment.level === "HIGH"     ? C.warn   :
                               riskAssessment.level === "MEDIUM"   ? C.gold   : C.safe
                             ),
-                            animation: riskAssessment.level === "CRITICAL" ? "pulse 1s infinite" : "none",
+                            animation: riskAssessment.level === "CRITICAL" ? "dot-breathe 1.4s ease-in-out infinite" : "none",
                             textShadow: `0 0 10px ${
                               riskAssessment.level === "CRITICAL" ? C.danger :
                               riskAssessment.level === "HIGH"     ? C.warn   :
@@ -1562,7 +1971,7 @@ export default function DeepSenseClientPage() {
                   </div>
                   <Tag color={pythLoading ? C.muted : C.safe}>{pythLoading ? "FETCHING" : "LIVE"}</Tag>
                 </div>
-                <div style={{ display: "grid", gridTemplateColumns: "repeat(5,1fr)", gap: 0 }}>
+                <div className="ds-scroll-row"><div style={{ display: "grid", gridTemplateColumns: "repeat(5,1fr)", gap: 0, minWidth: 480 }}>
                   {[
                     { label: "SUI/USD",  key: "sui" },
                     { label: "ETH/USD",  key: "ethereum" },
@@ -1599,7 +2008,7 @@ export default function DeepSenseClientPage() {
                       </div>
                     )
                   })}
-                </div>
+                </div></div>{/* end ds-scroll-row */}
               </Card>
 
               {/* PENDING ACTIONS */}
@@ -1623,14 +2032,29 @@ export default function DeepSenseClientPage() {
                               tx.object(RISK_GUARDIAN.CLOCK),
                             ],
                           })
+                          setPipelineStage(3)
                           signAndExecute(
                             { transaction: tx },
                             {
-                              onSuccess: () => { setTxMsg(`✓ Risk score synced to ${riskAssessment.score}`); setTimeout(refetchGuardian, 2000) },
-                              onError:   (e: any) => setTxMsg(`✗ ${e?.message ?? "Sync failed"}`),
+                              onSuccess: (result: any) => {
+                                const digest = result?.digest as string | undefined
+                                setPipelineStage(5)
+                                setPipelineTxDigest(digest)
+                                setTxMsg(`✓ Risk score synced to ${riskAssessment.score}`)
+                                setTimeout(refetchGuardian, 2000)
+                                // Auto-reset pipeline after 25s so it's ready for next event
+                                setTimeout(() => { setPipelineStage(-1); setPipelineTxDigest(undefined) }, 25_000)
+                              },
+                              onError: (e: any) => {
+                                setPipelineStage(s => s === 3 ? 2 : s)
+                                setTxMsg(`✗ ${e?.message ?? "Sync failed"}`)
+                              },
                             },
                           )
-                        } catch (e: any) { setTxMsg(`✗ ${e?.message ?? "Sync failed"}`) }
+                        } catch (e: any) {
+                          setPipelineStage(s => s === 3 ? 2 : s)
+                          setTxMsg(`✗ ${e?.message ?? "Sync failed"}`)
+                        }
                       }}
                       style={{
                         fontFamily: MONO, fontSize: 11, fontWeight: 700, letterSpacing: 2,
@@ -1664,7 +2088,7 @@ export default function DeepSenseClientPage() {
               )}
 
               {/* Section A — Status Cards */}
-              <div style={{ display: "grid", gridTemplateColumns: "repeat(4,1fr)", gap: 10 }}>
+              <div className="ds-metric-grid" style={{ marginBottom: 0 }}>
                 {/* Risk Score */}
                 <Card style={{ padding: "16px 18px" }}>
                   <div style={{ fontFamily: MONO, fontSize: 9, color: C.muted, letterSpacing: 3, marginBottom: 8 }}>RISK SCORE</div>
@@ -1714,7 +2138,7 @@ export default function DeepSenseClientPage() {
               {/* Section B — Agent Info */}
               <Card style={{ padding: "14px 18px" }}>
                 <div style={{ fontFamily: MONO, fontSize: 9, color: C.muted, letterSpacing: 3, marginBottom: 12 }}>AI AGENT STATUS</div>
-                <div style={{ display: "grid", gridTemplateColumns: "repeat(4,1fr)", gap: 16 }}>
+                <div className="ds-metric-grid" style={{ marginBottom: 0, gap: 16 }}>
                   <div>
                     <div style={{ fontFamily: MONO, fontSize: 9, color: C.muted, letterSpacing: 2, marginBottom: 5 }}>AGENT ADDRESS</div>
                     <span style={{ fontFamily: MONO, fontSize: 11, color: C.accent }}>{fmt.addr(policyState.agent)}</span>
@@ -1736,7 +2160,7 @@ export default function DeepSenseClientPage() {
                 </div>
               </Card>
 
-              <div style={{ display: "grid", gridTemplateColumns: "1fr 320px", gap: 14 }}>
+              <div className="ds-side-grid">
                 {/* Section C — Event Log */}
                 <Card>
                   <div style={{ padding: "14px 16px", borderBottom: `1px solid ${C.border}` }}>
@@ -1918,7 +2342,7 @@ export default function DeepSenseClientPage() {
 
         {/* POSITIONS TAB */}
         {tab === "positions" && (
-          <div style={{ display: "grid", gridTemplateColumns: "1fr 380px", gap: 14 }}>
+          <div className="ds-side-grid">
             <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
               <PortfolioOverview positions={positions} walletConnected={isWalletConnected} />
 
@@ -2035,7 +2459,7 @@ export default function DeepSenseClientPage() {
             </div>
 
             <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
-              <AIAdvisor positions={positions} pools={pools} groqKey={groqKey} />
+              <AIAdvisor positions={positions} pools={pools} groqKey={groqKey} riskAssessment={riskAssessment} policyState={policyState} protocolPositions={protocolPositions} />
               <RiskFeed events={riskEvents} walletConnected={isWalletConnected} />
             </div>
           </div>
@@ -2053,7 +2477,7 @@ export default function DeepSenseClientPage() {
                 ))}
               </div>
             )}
-            <div style={{ display: "grid", gridTemplateColumns: "1fr 320px", gap: 14 }}>
+            <div className="ds-side-grid">
               <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
                 <DeepBookPanel selectedPool={selectedPool} />
                 {selectedPool && (
@@ -2089,8 +2513,8 @@ export default function DeepSenseClientPage() {
 
         {/* AI ADVISOR TAB */}
         {tab === "advisor" && (
-          <div style={{ display: "grid", gridTemplateColumns: "1fr 360px", gap: 14 }}>
-            <AIAdvisor positions={positions} pools={pools} groqKey={groqKey} />
+          <div className="ds-side-grid">
+            <AIAdvisor positions={positions} pools={pools} groqKey={groqKey} riskAssessment={riskAssessment} policyState={policyState} protocolPositions={protocolPositions} />
             <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
               <RiskFeed events={riskEvents} walletConnected={isWalletConnected} />
               {positions.length > 0 && (
