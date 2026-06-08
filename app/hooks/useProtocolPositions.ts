@@ -19,6 +19,9 @@ export type ProtocolPosition = {
     coinTypeB?: string;
     [key: string]: string | undefined;
   };
+  // Enriched by SDK fetchers when available
+  healthFactor?: number;   // Navi account-level health factor (0–∞, >1 = safe)
+  usdValue?: number;       // decimal-adjusted token amount × USD price
 };
 
 type HookResult = {
@@ -94,48 +97,150 @@ function extractAllGenerics(rawType: string): string[] {
 // address. getOwnedObjects never returns these — the SDK is required.
 // navi-sdk is CJS-only so Turbopack handles it without ESM static analysis.
 
+// Per-token decimals sourced from navi-sdk address.js exports.
+// getNAVIPortfolio returns raw smallest-unit integers, not decimal-adjusted amounts.
+const NAVI_DECIMALS: Record<string, number> = {
+  SUI:      9,
+  VSUI:     9, VSUI_ALT: 9,
+  HASUI:    9,
+  NAVX:     9,
+  CETUS:    9,
+  BLUE:     9,
+  BUCK:     9,
+  STSUI:    9,
+  WAL:      9,
+  HAEDAL:   9,
+  IKA:      9,
+  XAUM:     9,
+  SSUI:     9,
+  USDT:     6,
+  WUSDC:    6, NUSDC: 6, USDC: 6,
+  AUSD:     6,
+  USDY:     6,
+  NS:       6,
+  DEEP:     6,
+  FDUSD:    6,
+  SUIDOLLAR:6,
+  SUIUSDT:  6, SUIUSDE: 6, USDSUI: 6,
+  WETH:     8, ETH: 8,
+  WBTC:     8, SUIBTC: 8, XBTC: 8, LBTC: 8, LORENZOBTC: 8,
+  MBTC:     8, YBTC: 8, ENZOBTC: 8, LZWBTC: 8,
+  WSOL:     8,
+};
+
+// CoinGecko price-feed IDs for each Navi asset key (lowercase match).
+const NAVI_TO_CG: Record<string, string> = {
+  sui:      "sui",
+  vsui:     "sui",
+  hasui:    "sui",
+  stsui:    "sui",
+  ssui:     "sui",
+  navx:     "navi-protocol",
+  cetus:    "cetus-protocol",
+  deep:     "deep-book",
+  usdt:     "tether",
+  wusdc:    "usd-coin", nusdc: "usd-coin", usdc: "usd-coin",
+  ausd:     "tether",
+  usdy:     "ondo-us-dollar-yield",
+  fdusd:    "first-digital-usd",
+  suiusdt:  "tether",
+  suiusde:  "ethena-usde",
+  usdsui:   "tether",
+  weth:     "ethereum", eth: "ethereum",
+  wbtc:     "bitcoin",  suibtc: "bitcoin", xbtc: "bitcoin",
+  lbtc:     "bitcoin",  lorenzobtc: "bitcoin", mbtc: "bitcoin",
+  ybtc:     "bitcoin",  enzobtc: "bitcoin",   lzwbtc: "bitcoin",
+  wsol:     "solana",
+  buck:     "tether",
+  blue:     "sui",
+  haedal:   "sui",
+  ika:      "sui",
+  wal:      "walrus-2",
+  ns:       "sui",
+  xaum:     "tether",
+};
+
+function naviDecimals(assetKey: string): number {
+  const upper = assetKey.toUpperCase().replace(/[^A-Z0-9]/g, "");
+  return NAVI_DECIMALS[upper] ?? 9;
+}
+
 async function fetchNaviPositions(
   address: string,
   network: string,
+  cgPrices?: Record<string, { usd: number; chg: number }> | null,
 ): Promise<ProtocolPosition[]> {
   try {
     const { NAVISDKClient } = await import("navi-sdk");
     // NAVISDKClient auto-generates a throwaway mnemonic internally.
-    // The generated account is never used for signing — getNAVIPortfolio(address)
-    // is a read-only RPC query against the shared Navi Storage object.
+    // The generated account is never used for signing — all calls are read-only
+    // queries against Navi's shared Storage object on-chain.
     const client = new (NAVISDKClient as any)({
       networkType:      network === "mainnet" ? "mainnet" : "testnet",
       numberOfAccounts: 1,
     });
-    const portfolio: Map<string, { borrowBalance: number; supplyBalance: number }> =
-      await client.accounts[0].getNAVIPortfolio(address, false);
+    const account = client.accounts[0];
+
+    // Fetch portfolio and account health factor in parallel — both are read-only RPC calls.
+    const [portfolio, rawHealth] = await Promise.all([
+      account.getNAVIPortfolio(address, false) as Promise<Map<string, { borrowBalance: number; supplyBalance: number }>>,
+      (account.getHealthFactor(address) as Promise<number>).catch((err: unknown) => {
+        console.error("[useProtocolPositions] Navi getHealthFactor error:", err);
+        return null as null;
+      }),
+    ]);
+
+    // Convert Navi's account-level health factor to 0–100 for the shared HEALTH column.
+    // hf ≥ 2 → 100% (comfortably safe), hf = 1 → 50% (at threshold), hf < 1 → <50% (at risk).
+    const naviHealthPct: number | undefined =
+      rawHealth != null && isFinite(rawHealth)
+        ? Math.round(Math.min(rawHealth / 2, 1) * 100)
+        : undefined;
 
     const results: ProtocolPosition[] = [];
+
     portfolio.forEach(({ supplyBalance, borrowBalance }, assetKey: string) => {
       const sym = assetKey.toUpperCase();
+      const dec = naviDecimals(assetKey);
+      const cgKey = NAVI_TO_CG[assetKey.toLowerCase()];
+      const usdPrice: number | null = cgKey ? (cgPrices?.[cgKey]?.usd ?? null) : null;
+
       if (supplyBalance > 0) {
+        const amount = supplyBalance / Math.pow(10, dec);
         results.push({
-          protocol: "Navi Protocol",
-          type:     "LEND",
-          asset:    sym,
-          objectId: `navi-lend-${sym}-${address}`,
-          fields:   { supplyBalance },
-          rawType:  "navi_protocol::storage::SupplyPosition",
-          details:  { balance: supplyBalance.toFixed(6) },
+          protocol:    "Navi Protocol",
+          type:        "LEND",
+          asset:       sym,
+          objectId:    `navi-lend-${sym}-${address}`,
+          fields:      { supplyBalance },
+          rawType:     "navi_protocol::storage::SupplyPosition",
+          details:     { balance: amount.toFixed(dec <= 6 ? 2 : 4) },
+          healthFactor: rawHealth ?? undefined,
+          usdValue:    usdPrice != null ? amount * usdPrice : undefined,
         });
       }
       if (borrowBalance > 0) {
+        const amount = borrowBalance / Math.pow(10, dec);
         results.push({
-          protocol: "Navi Protocol",
-          type:     "BORROW",
-          asset:    sym,
-          objectId: `navi-borrow-${sym}-${address}`,
-          fields:   { borrowBalance },
-          rawType:  "navi_protocol::storage::BorrowPosition",
-          details:  { balance: borrowBalance.toFixed(6) },
+          protocol:    "Navi Protocol",
+          type:        "BORROW",
+          asset:       sym,
+          objectId:    `navi-borrow-${sym}-${address}`,
+          fields:      { borrowBalance },
+          rawType:     "navi_protocol::storage::BorrowPosition",
+          details:     { balance: amount.toFixed(dec <= 6 ? 2 : 4) },
+          healthFactor: rawHealth ?? undefined,
+          usdValue:    usdPrice != null ? amount * usdPrice : undefined,
         });
       }
     });
+
+    // Stamp the account-level health percentage on every Navi position via details
+    // so it survives the ProtocolPosition → adapter mapping in page.tsx.
+    if (naviHealthPct !== undefined) {
+      for (const pos of results) pos.details.healthPct = String(naviHealthPct);
+    }
+
     return results;
   } catch (e) {
     console.error("[useProtocolPositions] Navi SDK error:", e);
@@ -304,6 +409,7 @@ async function fetchFallbackPositions(
 export function useProtocolPositions(
   walletAddress: string | null,
   network: string,
+  cgPrices?: Record<string, { usd: number; chg: number }> | null,
 ): HookResult {
   const [positions, setPositions] = useState<ProtocolPosition[]>([]);
   const [loading, setLoading]     = useState(false);
@@ -313,6 +419,9 @@ export function useProtocolPositions(
   const rpcUrl = network === "mainnet"
     ? getJsonRpcFullnodeUrl("mainnet")
     : getJsonRpcFullnodeUrl("testnet");
+
+  // Stable JSON key so the effect only re-runs when prices actually change
+  const pricesKey = cgPrices ? JSON.stringify(cgPrices) : "null";
 
   const fetchAll = useCallback(async () => {
     if (!walletAddress) {
@@ -326,7 +435,7 @@ export function useProtocolPositions(
 
       // Navi SDK and raw scanner run in parallel; each is independently fault-tolerant.
       const [naviPos, fallbackPos] = await Promise.all([
-        fetchNaviPositions(walletAddress, network),
+        fetchNaviPositions(walletAddress, network, cgPrices),
         fetchFallbackPositions(client, walletAddress),
       ]);
 
@@ -337,7 +446,8 @@ export function useProtocolPositions(
     } finally {
       setLoading(false);
     }
-  }, [walletAddress, rpcUrl, network]);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [walletAddress, rpcUrl, network, pricesKey]);
 
   useEffect(() => {
     fetchAll();

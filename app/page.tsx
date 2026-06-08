@@ -372,12 +372,28 @@ function PositionTable({ positions, onSelect, selected, walletConnected }: any) 
                     <Tag color={p.type==="SHORT"?C.danger : p.type==="LONG"?C.safe : p.type==="LP"?C.gold : C.blue}>{p.type}</Tag>
                   </td>
                   <td style={{ padding: "12px 14px" }}><span style={{ fontFamily: MONO, fontSize: 12, color: C.text }}>{p.asset}</span></td>
-                  <td style={{ padding: "12px 14px" }}><span style={{ fontFamily: MONO, fontSize: 12, color: C.text }}>{p.balStr ? `${parseFloat(p.balStr).toFixed(4)} ${p.asset}` : "—"}</span></td>
+                  <td style={{ padding: "12px 14px" }}>
+                    <span style={{ fontFamily: MONO, fontSize: 12, color: C.text }}>
+                      {p.size > 0 ? fmt.usd(p.size) : p.balStr ? `${parseFloat(p.balStr).toFixed(4)} ${p.asset}` : "—"}
+                    </span>
+                    {p.size > 0 && p.balStr && (
+                      <span style={{ fontFamily: MONO, fontSize: 9, color: C.muted, display: "block", marginTop: 2 }}>
+                        {parseFloat(p.balStr).toFixed(4)} {p.asset}
+                      </span>
+                    )}
+                  </td>
                   <td style={{ padding: "12px 14px" }}>
                     <span style={{ fontFamily: MONO, fontSize: 12, color: C.muted }}>—</span>
                   </td>
                   <td style={{ padding: "12px 14px", minWidth: 80 }}>
-                    <span style={{ fontFamily: MONO, fontSize: 12, color: C.muted }}>—</span>
+                    {p.health < 100 || p.protocol === "Navi Protocol" ? (
+                      <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                        <HealthBar value={p.health} style={{ flex: 1 }} />
+                        <span style={{ fontFamily: MONO, fontSize: 11, color: healthColor(p.health), minWidth: 30 }}>{p.health}%</span>
+                      </div>
+                    ) : (
+                      <span style={{ fontFamily: MONO, fontSize: 12, color: C.muted }}>—</span>
+                    )}
                   </td>
                   <td style={{ padding: "12px 14px" }}>
                     <span style={{ fontFamily: MONO, fontSize: 12, color: C.muted }}>—</span>
@@ -1021,27 +1037,30 @@ export default function DeepSenseClientPage() {
     loading: protocolLoading,
     error: protocolError,
     protocolCounts,
-  } = useProtocolPositions(walletAddr, "mainnet")
+  } = useProtocolPositions(walletAddr, "mainnet", prices)
 
   // Adapt ProtocolPosition[] to the shape expected by PortfolioOverview, PositionTable, etc.
-  // Financial metrics (size in USD, health %, PnL) are not available from the scanner;
-  // they default to neutral values so no fake data is displayed.
-  const positions = protocolPositions.map((p, i) => ({
-    id:               p.objectId || `pp-${i}`,
-    protocol:         p.protocol,
-    type:             p.type,
-    asset:            p.asset,
-    size:             0,
-    collateral:       0,
-    leverage:         1,
-    entryPrice:       null,
-    liquidationPrice: null,
-    health:           100,
-    pnl:              0,
-    pnlPct:           0,
-    pool:             "",
-    balStr:           p.details.balance ?? p.details.liquidity ?? null,
-  }))
+  // usdValue and healthPct are populated by the Navi SDK fetcher; other protocols default
+  // to neutral values — no fabricated numbers.
+  const positions = protocolPositions.map((p, i) => {
+    const healthPct = p.details.healthPct != null ? parseInt(p.details.healthPct, 10) : null
+    return {
+      id:               p.objectId || `pp-${i}`,
+      protocol:         p.protocol,
+      type:             p.type,
+      asset:            p.asset,
+      size:             p.usdValue ?? 0,
+      collateral:       0,
+      leverage:         1,
+      entryPrice:       null,
+      liquidationPrice: null,
+      health:           healthPct ?? 100,
+      pnl:              0,
+      pnlPct:           0,
+      pool:             "",
+      balStr:           p.details.balance ?? p.details.liquidity ?? null,
+    }
+  })
 
   console.log("[DeepSense] Wallet status:", { isWalletConnected, walletAddr, livePositionsCount: positions.length, protocolLoading })
   const riskEvents = generateRiskEvents(positions)
