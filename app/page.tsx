@@ -279,16 +279,23 @@ function LiveTicker({ pools }: { pools: any[] }) {
 // ─── PORTFOLIO OVERVIEW ────────────────────────────────────────────────────────
 function PortfolioOverview({ positions, walletConnected }: any) {
   const hasPositions = walletConnected && positions.length > 0
-  const totalValue = hasPositions ? positions.reduce((s: number, p: any) => s + p.size, 0) : 0
-  const totalPnl   = hasPositions ? positions.reduce((s: number, p: any) => s + p.pnl,   0) : 0
-  const avgHealth  = hasPositions ? Math.round(positions.reduce((s: number, p: any) => s + p.health, 0) / positions.length) : 0
-  const atRisk     = hasPositions ? positions.filter((p: any) => p.health < 60).length : 0
+  // Net value = sum of supplied USD values minus sum of borrowed USD values.
+  // Only positions with a real usdValue (size > 0) contribute — others default to 0.
+  const supplied  = hasPositions ? positions.filter((p: any) => p.type === "LEND"  || p.type === "STAKE" || p.type === "LP").reduce((s: number, p: any) => s + (p.size || 0), 0) : 0
+  const borrowed  = hasPositions ? positions.filter((p: any) => p.type === "BORROW").reduce((s: number, p: any) => s + (p.size || 0), 0) : 0
+  const netValue  = supplied - borrowed
+  const totalPnl  = hasPositions ? positions.reduce((s: number, p: any) => s + p.pnl, 0) : 0
+  const healthPos = hasPositions ? positions.filter((p: any) => p.health < 100) : []
+  const avgHealth = healthPos.length > 0 ? Math.round(healthPos.reduce((s: number, p: any) => s + p.health, 0) / healthPos.length) : (hasPositions ? 100 : 0)
+  const atRisk    = hasPositions ? positions.filter((p: any) => p.health < 60).length : 0
   const stats = [
     {
-      label: "PORTFOLIO VALUE",
-      value: hasPositions ? fmt.usd(totalValue) : "$0.00",
+      label: "NET DeFi VALUE",
+      value: hasPositions ? fmt.usd(netValue) : "$0.00",
       color: C.text,
-      sub: hasPositions ? `${positions.length} positions` : "Connect wallet to load",
+      sub: hasPositions
+        ? `${fmt.usd(supplied)} supplied · ${fmt.usd(borrowed)} borrowed`
+        : "Connect wallet to load",
     },
     {
       label: "TOTAL PNL",
@@ -298,9 +305,9 @@ function PortfolioOverview({ positions, walletConnected }: any) {
     },
     {
       label: "AVG HEALTH",
-      value: hasPositions ? `${avgHealth}%` : "—",
-      color: hasPositions ? healthColor(avgHealth) : C.muted,
-      sub: hasPositions ? "Across all positions" : "—",
+      value: healthPos.length > 0 ? `${avgHealth}%` : "—",
+      color: healthPos.length > 0 ? healthColor(avgHealth) : C.muted,
+      sub: healthPos.length > 0 ? `Across ${healthPos.length} Navi position${healthPos.length !== 1 ? "s" : ""}` : hasPositions ? "No health data yet" : "—",
     },
     {
       label: "AT RISK",
