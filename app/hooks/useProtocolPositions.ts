@@ -96,99 +96,80 @@ function extractAllGenerics(rawType: string): string[] {
 // Navi stores all supply/borrow positions in a shared Storage object keyed by
 // address. getOwnedObjects never returns these — the SDK is required.
 // navi-sdk is CJS-only so Turbopack handles it without ESM static analysis.
-
-// Per-token decimals sourced from navi-sdk address.js exports.
-// getNAVIPortfolio returns raw smallest-unit integers, not decimal-adjusted amounts.
-const NAVI_DECIMALS: Record<string, number> = {
-  SUI:      9,
-  VSUI:     9, VSUI_ALT: 9,
-  HASUI:    9,
-  NAVX:     9,
-  CETUS:    9,
-  BLUE:     9,
-  BUCK:     9,
-  STSUI:    9,
-  WAL:      9,
-  HAEDAL:   9,
-  IKA:      9,
-  XAUM:     9,
-  SSUI:     9,
-  USDT:     6,
-  WUSDC:    6, NUSDC: 6, USDC: 6,
-  AUSD:     6,
-  USDY:     6,
-  NS:       6,
-  DEEP:     6,
-  FDUSD:    6,
-  SUIDOLLAR:6,
-  SUIUSDT:  6, SUIUSDE: 6, USDSUI: 6,
-  WETH:     8, ETH: 8,
-  WBTC:     8, SUIBTC: 8, XBTC: 8, LBTC: 8, LORENZOBTC: 8,
-  MBTC:     8, YBTC: 8, ENZOBTC: 8, LZWBTC: 8,
-  WSOL:     8,
-};
-
-// CoinGecko price-feed IDs for each Navi asset key (lowercase match).
-const NAVI_TO_CG: Record<string, string> = {
-  sui:      "sui",
-  vsui:     "sui",
-  hasui:    "sui",
-  stsui:    "sui",
-  ssui:     "sui",
-  navx:     "navi-protocol",
-  cetus:    "cetus-protocol",
-  deep:     "deep-book",
-  usdt:     "tether",
-  wusdc:    "usd-coin", nusdc: "usd-coin", usdc: "usd-coin",
-  ausd:     "tether",
-  usdy:     "ondo-us-dollar-yield",
-  fdusd:    "first-digital-usd",
-  suiusdt:  "tether",
-  suiusde:  "ethena-usde",
-  usdsui:   "tether",
-  weth:     "ethereum", eth: "ethereum",
-  wbtc:     "bitcoin",  suibtc: "bitcoin", xbtc: "bitcoin",
-  lbtc:     "bitcoin",  lorenzobtc: "bitcoin", mbtc: "bitcoin",
-  ybtc:     "bitcoin",  enzobtc: "bitcoin",   lzwbtc: "bitcoin",
-  wsol:     "solana",
-  buck:     "tether",
-  blue:     "sui",
-  haedal:   "sui",
-  ika:      "sui",
-  wal:      "walrus-2",
-  ns:       "sui",
-  xaum:     "tether",
-};
-
-function naviDecimals(assetKey: string): number {
-  const upper = assetKey.toUpperCase().replace(/[^A-Z0-9]/g, "");
-  return NAVI_DECIMALS[upper] ?? 9;
-}
+//
+// USD values come from Navi's own on-chain price oracle (getCoinOracleInfo)
+// rather than an external price feed, so they match Navi's UI exactly.
+// The oracle returns { price: u256, decimals: u8 } per asset.
+//
+// Navi normalises all token balances to 9 decimal places internally.
+// getNAVIPortfolio(addr, false) returns rawBalance × interestIndex (no /1e9).
+// Dividing by 1e9 converts to human-readable token amount.
 
 async function fetchNaviPositions(
   address: string,
   network: string,
-  cgPrices?: Record<string, { usd: number; chg: number }> | null,
+  // cgPrices kept in signature for hook compatibility — not used here
+  _cgPrices?: Record<string, { usd: number; chg: number }> | null,
 ): Promise<ProtocolPosition[]> {
   try {
-    const { NAVISDKClient } = await import("navi-sdk");
+    // navi-sdk re-exports CallFunctions and address config from its main entry
+    const navi = await import("navi-sdk") as any;
+    const {
+      NAVISDKClient,
+      pool: naviPool,
+      getReserveData,
+      getCoinOracleInfo,
+    } = navi;
+
     // NAVISDKClient auto-generates a throwaway mnemonic internally.
-    // The generated account is never used for signing — all calls are read-only
-    // queries against Navi's shared Storage object on-chain.
-    const client = new (NAVISDKClient as any)({
+    // The generated account is never used for signing — all calls are read-only.
+    const sdkClient = new NAVISDKClient({
       networkType:      network === "mainnet" ? "mainnet" : "testnet",
       numberOfAccounts: 1,
     });
-    const account = client.accounts[0];
+    const account = sdkClient.accounts[0];
+    const suiClient = account.client; // underlying Sui RPC client
 
-    // Fetch portfolio and account health factor in parallel — both are read-only RPC calls.
-    const [portfolio, rawHealth] = await Promise.all([
+    // Fetch portfolio and reserve metadata in parallel.
+    // Health factor is isolated so its failure cannot block positions.
+    const [portfolio, reserveData] = await Promise.all([
       account.getNAVIPortfolio(address, false) as Promise<Map<string, { borrowBalance: number; supplyBalance: number }>>,
-      (account.getHealthFactor(address) as Promise<number>).catch((err: unknown) => {
-        console.error("[useProtocolPositions] Navi getHealthFactor error:", err);
-        return null as null;
+      (getReserveData(address, suiClient) as Promise<any[]>).catch((err: unknown) => {
+        console.error("[useProtocolPositions] Navi getReserveData error:", err);
+        return [] as any[];
       }),
     ]);
+
+    // Health factor in its own isolated try/catch — never cancels position fetch.
+    let rawHealth: number | null = null;
+    try {
+      rawHealth = await account.getHealthFactor(address) as number;
+    } catch (err) {
+      console.error("[useProtocolPositions] Navi getHealthFactor error:", err);
+    }
+
+    // Build assetId → oracle_id map from reserve metadata
+    const assetToOracleId = new Map<number, number>();
+    for (const r of reserveData) {
+      assetToOracleId.set(Number(r.id), Number(r.oracle_id));
+    }
+
+    // Fetch oracle prices for all reserves, keyed by oracle_id
+    const oracleMap = new Map<number, number>(); // oracle_id → USD price
+    if (reserveData.length > 0) {
+      try {
+        const oracleIds = [...new Set(reserveData.map((r: any) => Number(r.oracle_id)))] as number[];
+        const oracleInfos: any[] = await getCoinOracleInfo(suiClient, oracleIds);
+        for (const o of oracleInfos) {
+          if (o.valid) {
+            // price is a u256 bigint string; decimals is u8
+            oracleMap.set(Number(o.oracle_id), Number(o.price) / Math.pow(10, Number(o.decimals)));
+          }
+        }
+      } catch (err) {
+        console.error("[useProtocolPositions] Navi getCoinOracleInfo error:", err);
+      }
+    }
 
     // Convert Navi's account-level health factor to 0–100 for the shared HEALTH column.
     // hf ≥ 2 → 100% (comfortably safe), hf = 1 → 50% (at threshold), hf < 1 → <50% (at risk).
@@ -201,36 +182,39 @@ async function fetchNaviPositions(
 
     portfolio.forEach(({ supplyBalance, borrowBalance }, assetKey: string) => {
       const sym = assetKey.toUpperCase();
-      const dec = naviDecimals(assetKey);
-      const cgKey = NAVI_TO_CG[assetKey.toLowerCase()];
-      const usdPrice: number | null = cgKey ? (cgPrices?.[cgKey]?.usd ?? null) : null;
+
+      // Look up oracle price: poolKey → assetId (from navi-sdk pool config) → oracle_id → USD
+      const poolConfig = naviPool?.[assetKey];
+      const assetId: number | undefined = poolConfig?.assetId;
+      const oracleId = assetId != null ? assetToOracleId.get(assetId) : undefined;
+      const usdPrice: number | null = oracleId != null ? (oracleMap.get(oracleId) ?? null) : null;
 
       if (supplyBalance > 0) {
-        const amount = supplyBalance / Math.pow(10, dec);
+        const amount = supplyBalance / 1e9;
         results.push({
-          protocol:    "Navi Protocol",
-          type:        "LEND",
-          asset:       sym,
-          objectId:    `navi-lend-${sym}-${address}`,
-          fields:      { supplyBalance },
-          rawType:     "navi_protocol::storage::SupplyPosition",
-          details:     { balance: amount.toFixed(dec <= 6 ? 2 : 4) },
+          protocol:     "Navi Protocol",
+          type:         "LEND",
+          asset:        sym,
+          objectId:     `navi-lend-${sym}-${address}`,
+          fields:       { supplyBalance },
+          rawType:      "navi_protocol::storage::SupplyPosition",
+          details:      { balance: amount.toFixed(amount < 1 ? 4 : 2) },
           healthFactor: rawHealth ?? undefined,
-          usdValue:    usdPrice != null ? amount * usdPrice : undefined,
+          usdValue:     usdPrice != null ? amount * usdPrice : undefined,
         });
       }
       if (borrowBalance > 0) {
-        const amount = borrowBalance / Math.pow(10, dec);
+        const amount = borrowBalance / 1e9;
         results.push({
-          protocol:    "Navi Protocol",
-          type:        "BORROW",
-          asset:       sym,
-          objectId:    `navi-borrow-${sym}-${address}`,
-          fields:      { borrowBalance },
-          rawType:     "navi_protocol::storage::BorrowPosition",
-          details:     { balance: amount.toFixed(dec <= 6 ? 2 : 4) },
+          protocol:     "Navi Protocol",
+          type:         "BORROW",
+          asset:        sym,
+          objectId:     `navi-borrow-${sym}-${address}`,
+          fields:       { borrowBalance },
+          rawType:      "navi_protocol::storage::BorrowPosition",
+          details:      { balance: amount.toFixed(amount < 1 ? 4 : 2) },
           healthFactor: rawHealth ?? undefined,
-          usdValue:    usdPrice != null ? amount * usdPrice : undefined,
+          usdValue:     usdPrice != null ? amount * usdPrice : undefined,
         });
       }
     });
