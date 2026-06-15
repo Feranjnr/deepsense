@@ -11,6 +11,7 @@ import { useProtocolPositions, type ProtocolPosition } from "@/app/hooks/useProt
 import { RISK_GUARDIAN } from "@/app/config/contracts"
 import { RiskGauge } from "@/app/components/RiskGauge"
 import { DecisionPipeline } from "@/app/components/DecisionPipeline"
+import { IntentEngine } from "@/app/components/IntentEngine"
 
 // ─── DESIGN TOKENS ─────────────────────────────────────────────────────────────
 const C = {
@@ -1271,6 +1272,7 @@ export default function DeepSenseClientPage() {
             { id: "dashboard", label: "DASHBOARD"  },
             { id: "guardian",  label: "GUARDIAN"   },
             { id: "positions", label: "POSITIONS"  },
+            { id: "intent",    label: "INTENT"     },
             { id: "advisor",   label: "AI ADVISOR" },
           ].map(t => (
             <button key={t.id} onClick={() => { setTab(t.id); setMoreOpen(false) }} style={{
@@ -2438,6 +2440,14 @@ export default function DeepSenseClientPage() {
               {selectedPool && <TradingPanel pool={selectedPool} network={network} />}
             </div>
           </div>
+        )}
+
+        {/* INTENT ENGINE TAB */}
+        {tab === "intent" && (
+          <IntentEngine
+            protocolPositions={protocolPositions}
+            riskAssessment={riskAssessment}
+          />
         )}
 
         {/* AI ADVISOR TAB */}
