@@ -671,10 +671,55 @@ Be precise and educational. Format with clear headers.`
 }
 
 // ─── AI ADVISOR CHAT ────────────────────────────────────────────────────────────
-function AIAdvisor({ positions, pools, groqKey, riskAssessment, policyState, protocolPositions }: any) {
+
+// Strip the optional ```action block from an AI reply and return both parts.
+function parseActionBlock(text: string): { cleanText: string; actionJson: Record<string, unknown> | null } {
+  const m = text.match(/```action\s*([\s\S]*?)```\s*$/)
+  if (!m) return { cleanText: text, actionJson: null }
+  try {
+    return { cleanText: text.slice(0, m.index).trimEnd(), actionJson: JSON.parse(m[1].trim()) }
+  } catch {
+    return { cleanText: text, actionJson: null }
+  }
+}
+
+// Map a parsed action object to an ActionIntent (guardian-only for now — no user funds moved).
+function buildGuardianIntent(
+  actionJson: Record<string, unknown>,
+  riskScore: number,
+  policyState: { risk_score: number } | null,
+): ActionIntent | null {
+  if (actionJson.action === "update_risk_score") {
+    const score = typeof actionJson.score === "number" ? actionJson.score : riskScore
+    const prev  = policyState?.risk_score ?? score
+    return {
+      protocol:      "RiskGuardian · Sui Testnet",
+      action:        "Update Risk Score",
+      amount:        score,
+      asset:         "score points",
+      effectOnScore: score - prev,
+      gasEstimate:   "~0.005 SUI",
+      buildTx: () => {
+        const tx = new Transaction()
+        tx.moveCall({
+          target: `${RISK_GUARDIAN.PACKAGE_ID}::${RISK_GUARDIAN.MODULE}::update_risk_score`,
+          arguments: [
+            tx.object(RISK_GUARDIAN.POLICY_ID),
+            tx.pure.u64(score),
+            tx.object(RISK_GUARDIAN.CLOCK),
+          ],
+        })
+        return tx
+      },
+    }
+  }
+  return null
+}
+
+function AIAdvisor({ positions, pools, groqKey, riskAssessment, policyState, protocolPositions, onStageChange, onIntentSuccess }: any) {
   const hasPositions = positions.length > 0
   const riskLevel = riskAssessment?.level
-  const [messages, setMessages] = useState<{role:"assistant"|"user";text:string}[]>([
+  const [messages, setMessages] = useState<{role:"assistant"|"user";text:string;intent?:ActionIntent|null}[]>([
     { role: "assistant", text: hasPositions
         ? `Hello. I'm DeepSense — your AI risk advisor for Sui DeFi. I have visibility into your on-chain positions${riskLevel && riskLevel !== "LOW" ? ` and the live risk engine is showing a ${riskLevel} alert` : ""}. Ask me anything about your portfolio, risk exposure, or market conditions.`
         : "Hello. I'm DeepSense — your AI risk advisor for Sui DeFi. No wallet is connected yet, so I'll provide general DeFi and Sui risk advice. Connect your wallet for personalized portfolio analysis."
@@ -682,6 +727,7 @@ function AIAdvisor({ positions, pools, groqKey, riskAssessment, policyState, pro
   ])
   const [input, setInput] = useState("")
   const [loading, setLoading] = useState(false)
+  const [dismissedIntents, setDismissedIntents] = useState<Set<number>>(new Set())
   const bottomRef = useRef<HTMLDivElement>(null)
 
   useEffect(() => { bottomRef.current?.scrollIntoView({ behavior: "smooth" }) }, [messages])
@@ -751,7 +797,14 @@ ${pools.length > 0
   : "Market price data loading."
 }
 
-Answer grounded in THIS user's specific situation. Reference their actual assets, protocol positions, and risk factors by name. When policy is paused or score is HIGH/CRITICAL, highlight urgency and concrete steps. Be conversational but precise. Keep responses under 200 words. You understand Sui's object model, Move contracts, and DeepBook CLOB mechanics.`
+Answer grounded in THIS user's specific situation. Reference their actual assets, protocol positions, and risk factors by name. When policy is paused or score is HIGH/CRITICAL, highlight urgency and concrete steps. Be conversational but precise. Keep responses under 200 words. You understand Sui's object model, Move contracts, and DeepBook CLOB mechanics.
+
+## ACTION OUTPUT (optional)
+When you are explicitly telling the user to take a specific on-chain action RIGHT NOW — not just mentioning it as a possibility — append this block at the very end of your reply on its own line, after your text:
+\`\`\`action
+{"action":"update_risk_score","score":${ra?.score ?? 0},"reason":"<one sentence why>"}
+\`\`\`
+Only emit this block for a concrete recommendation. Omit entirely for analysis, explanations, or general advice. The only supported action is "update_risk_score".`
 
     try {
       const res = await fetch("/api/advisor", {
@@ -763,10 +816,12 @@ Answer grounded in THIS user's specific situation. Reference their actual assets
         }),
       })
       const data = await res.json()
-      const reply: string = res.status === 401
+      const rawReply: string = res.status === 401
         ? "API key not configured. Set GROQ_API_KEY in .env.local or provide a key via the session store."
         : (data.reply || "Unable to respond.")
-      setMessages(m => [...m, { role: "assistant", text: reply }])
+      const { cleanText, actionJson } = parseActionBlock(rawReply)
+      const intent = actionJson ? buildGuardianIntent(actionJson, ra?.score ?? 0, ps) : null
+      setMessages(m => [...m, { role: "assistant", text: cleanText, intent }])
     } catch {
       setMessages(m => [...m, { role: "assistant", text: "Connection error. Please retry." }])
     }
@@ -783,23 +838,41 @@ Answer grounded in THIS user's specific situation. Reference their actual assets
         gap: 12, minHeight: 300, maxHeight: 400,
       }}>
         {messages.map((m: any, i: number) => (
-          <div key={i} style={{
-            display: "flex", flexDirection: m.role === "user" ? "row-reverse" : "row", gap: 10,
-          }}>
+          <div key={i} style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+            {/* Message bubble row */}
             <div style={{
-              width: 28, height: 28, borderRadius: "50%", flexShrink: 0,
-              background: m.role === "user" ? C.blue+"33" : C.accent+"22",
-              border: `1px solid ${m.role === "user" ? C.blue+"55" : C.accent+"44"}`,
-              display: "flex", alignItems: "center", justifyContent: "center",
-              fontFamily: MONO, fontSize: 9, color: m.role === "user" ? C.blue : C.accent,
-            }}>{m.role === "user" ? "YOU" : "AI"}</div>
-            <div style={{
-              maxWidth: "82%", padding: "10px 13px", borderRadius: 6,
-              background: m.role === "user" ? C.blue+"14" : C.card,
-              border: `1px solid ${m.role === "user" ? C.blue+"33" : C.border}`,
-              fontFamily: SANS, fontSize: 12, color: C.text, lineHeight: 1.7,
-              whiteSpace: "pre-wrap",
-            }}>{m.text}</div>
+              display: "flex", flexDirection: m.role === "user" ? "row-reverse" : "row", gap: 10,
+            }}>
+              <div style={{
+                width: 28, height: 28, borderRadius: "50%", flexShrink: 0,
+                background: m.role === "user" ? C.blue+"33" : C.accent+"22",
+                border: `1px solid ${m.role === "user" ? C.blue+"55" : C.accent+"44"}`,
+                display: "flex", alignItems: "center", justifyContent: "center",
+                fontFamily: MONO, fontSize: 9, color: m.role === "user" ? C.blue : C.accent,
+              }}>{m.role === "user" ? "YOU" : "AI"}</div>
+              <div style={{
+                maxWidth: "82%", padding: "10px 13px", borderRadius: 6,
+                background: m.role === "user" ? C.blue+"14" : C.card,
+                border: `1px solid ${m.role === "user" ? C.blue+"33" : C.border}`,
+                fontFamily: SANS, fontSize: 12, color: C.text, lineHeight: 1.7,
+                whiteSpace: "pre-wrap",
+              }}>{m.text}</div>
+            </div>
+            {/* Inline ActionPreview — shown when AI attaches a guardian intent */}
+            {m.role === "assistant" && m.intent && !dismissedIntents.has(i) && (
+              <div style={{ marginLeft: 38 }}>
+                <ActionPreview
+                  intent={m.intent}
+                  protocolPositions={protocolPositions ?? []}
+                  onCancel={() => setDismissedIntents(prev => new Set([...prev, i]))}
+                  onStageChange={onStageChange}
+                  onSuccess={(digest: string) => {
+                    onIntentSuccess(digest, m.intent.amount)
+                    setDismissedIntents(prev => new Set([...prev, i]))
+                  }}
+                />
+              </div>
+            )}
           </div>
         ))}
         {loading && (
@@ -2402,7 +2475,15 @@ export default function DeepSenseClientPage() {
             </div>
 
             <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
-              <AIAdvisor positions={positions} pools={pools} groqKey={groqKey} riskAssessment={riskAssessment} policyState={policyState} protocolPositions={protocolPositions} />
+              <AIAdvisor positions={positions} pools={pools} groqKey={groqKey} riskAssessment={riskAssessment} policyState={policyState} protocolPositions={protocolPositions}
+                onStageChange={setPipelineStage}
+                onIntentSuccess={(digest: string, score: number) => {
+                  setPipelineTxDigest(digest)
+                  setTxMsg(`✓ Risk score synced to ${score}`)
+                  setTimeout(refetchGuardian, 2000)
+                  setTimeout(() => { setPipelineStage(-1); setPipelineTxDigest(undefined) }, 25_000)
+                }}
+              />
               <RiskFeed events={riskEvents} walletConnected={isWalletConnected} />
             </div>
           </div>
@@ -2465,7 +2546,15 @@ export default function DeepSenseClientPage() {
         {/* AI ADVISOR TAB */}
         {tab === "advisor" && (
           <div className="ds-side-grid">
-            <AIAdvisor positions={positions} pools={pools} groqKey={groqKey} riskAssessment={riskAssessment} policyState={policyState} protocolPositions={protocolPositions} />
+            <AIAdvisor positions={positions} pools={pools} groqKey={groqKey} riskAssessment={riskAssessment} policyState={policyState} protocolPositions={protocolPositions}
+              onStageChange={setPipelineStage}
+              onIntentSuccess={(digest: string, score: number) => {
+                setPipelineTxDigest(digest)
+                setTxMsg(`✓ Risk score synced to ${score}`)
+                setTimeout(refetchGuardian, 2000)
+                setTimeout(() => { setPipelineStage(-1); setPipelineTxDigest(undefined) }, 25_000)
+              }}
+            />
             <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
               <RiskFeed events={riskEvents} walletConnected={isWalletConnected} />
               {positions.length > 0 && (
