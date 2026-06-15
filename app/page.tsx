@@ -12,6 +12,7 @@ import { RISK_GUARDIAN } from "@/app/config/contracts"
 import { RiskGauge } from "@/app/components/RiskGauge"
 import { DecisionPipeline } from "@/app/components/DecisionPipeline"
 import { IntentEngine } from "@/app/components/IntentEngine"
+import { ActionPreview, type ActionIntent } from "@/app/components/ActionPreview"
 
 // ─── DESIGN TOKENS ─────────────────────────────────────────────────────────────
 const C = {
@@ -1086,6 +1087,8 @@ export default function DeepSenseClientPage() {
   // ── Decision Pipeline state ──
   const [pipelineStage, setPipelineStage]       = useState(-1)
   const [pipelineTxDigest, setPipelineTxDigest] = useState<string | undefined>()
+  // ── Action preview (guardian intent) ──
+  const [pendingIntent, setPendingIntent]       = useState<ActionIntent | null>(null)
   const prevRiskScore = useRef(-1)
   const prevActionLen = useRef(0)
 
@@ -1778,6 +1781,26 @@ export default function DeepSenseClientPage() {
               {/* Decision Pipeline */}
               <DecisionPipeline stage={pipelineStage} txDigest={pipelineTxDigest} />
 
+              {/* Action Preview — shown when user hits PREVIEW INTENT */}
+              {pendingIntent && (
+                <ActionPreview
+                  intent={pendingIntent}
+                  protocolPositions={protocolPositions}
+                  onCancel={() => setPendingIntent(null)}
+                  onStageChange={setPipelineStage}
+                  onSuccess={(digest) => {
+                    setPipelineTxDigest(digest)
+                    setTxMsg(`✓ Risk score synced to ${pendingIntent.amount}`)
+                    setTimeout(refetchGuardian, 2000)
+                    setTimeout(() => {
+                      setPipelineStage(-1)
+                      setPipelineTxDigest(undefined)
+                      setPendingIntent(null)
+                    }, 25_000)
+                  }}
+                />
+              )}
+
               {/* AI RISK ENGINE panel */}
               <Card style={{ border: `1px solid ${C.accent}33`, background: C.accent+"05" }}>
                 <div style={{ padding: "14px 16px", borderBottom: `1px solid ${C.border}`, display: "flex", justifyContent: "space-between", alignItems: "center" }}>
@@ -1945,39 +1968,28 @@ export default function DeepSenseClientPage() {
                     <button
                       onClick={() => {
                         if (!riskAssessment) return
-                        try {
-                          const tx = new Transaction()
-                          tx.moveCall({
-                            target: `${RISK_GUARDIAN.PACKAGE_ID}::${RISK_GUARDIAN.MODULE}::update_risk_score`,
-                            arguments: [
-                              tx.object(RISK_GUARDIAN.POLICY_ID),
-                              tx.pure.u64(riskAssessment.score),
-                              tx.object(RISK_GUARDIAN.CLOCK),
-                            ],
-                          })
-                          setPipelineStage(3)
-                          signAndExecute(
-                            { transaction: tx },
-                            {
-                              onSuccess: (result: any) => {
-                                const digest = result?.digest as string | undefined
-                                setPipelineStage(5)
-                                setPipelineTxDigest(digest)
-                                setTxMsg(`✓ Risk score synced to ${riskAssessment.score}`)
-                                setTimeout(refetchGuardian, 2000)
-                                // Auto-reset pipeline after 25s so it's ready for next event
-                                setTimeout(() => { setPipelineStage(-1); setPipelineTxDigest(undefined) }, 25_000)
-                              },
-                              onError: (e: any) => {
-                                setPipelineStage(s => s === 3 ? 2 : s)
-                                setTxMsg(`✗ ${e?.message ?? "Sync failed"}`)
-                              },
-                            },
-                          )
-                        } catch (e: any) {
-                          setPipelineStage(s => s === 3 ? 2 : s)
-                          setTxMsg(`✗ ${e?.message ?? "Sync failed"}`)
-                        }
+                        const score = riskAssessment.score
+                        const prevScore = policyState?.risk_score ?? score
+                        setPendingIntent({
+                          protocol:      "RiskGuardian · Sui Testnet",
+                          action:        "Update Risk Score",
+                          amount:        score,
+                          asset:         "score points",
+                          effectOnScore: score - prevScore,
+                          gasEstimate:   "~0.005 SUI",
+                          buildTx: () => {
+                            const tx = new Transaction()
+                            tx.moveCall({
+                              target: `${RISK_GUARDIAN.PACKAGE_ID}::${RISK_GUARDIAN.MODULE}::update_risk_score`,
+                              arguments: [
+                                tx.object(RISK_GUARDIAN.POLICY_ID),
+                                tx.pure.u64(score),
+                                tx.object(RISK_GUARDIAN.CLOCK),
+                              ],
+                            })
+                            return tx
+                          },
+                        })
                       }}
                       style={{
                         fontFamily: MONO, fontSize: 11, fontWeight: 700, letterSpacing: 2,
@@ -1985,7 +1997,7 @@ export default function DeepSenseClientPage() {
                         background: C.gold+"22", border: `1px solid ${C.gold}66`,
                         color: C.gold, textShadow: `0 0 8px ${C.gold}88`,
                       }}
-                    >SYNC TO CHAIN →</button>
+                    >PREVIEW INTENT →</button>
                   </div>
                   <div>
                     {actionLog.slice(0, 8).map((entry, i) => (
