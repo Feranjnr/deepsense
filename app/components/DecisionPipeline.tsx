@@ -6,17 +6,17 @@ const MONO = "'IBM Plex Mono','Courier New',monospace"
 const SANS = "'IBM Plex Sans',system-ui,sans-serif"
 
 const C = {
-  bg:       "#03080f",
-  card:     "#08111c",
-  border:   "#0e2035",
-  borderHi: "#1a3d5c",
-  accent:   "#0af5d4",
-  safe:     "#00e676",
-  warn:     "#ff9900",
-  danger:   "#ff4567",
-  text:     "#d0e8f0",
-  muted:    "#3a5a70",
-  mutedHi:  "#5a7a90",
+  bg:       "#FBFBFA",
+  card:     "#FFFFFF",
+  border:   "#E4E6EB",
+  borderHi: "#D4D8E0",
+  accent:   "#1A56DB",
+  safe:     "#1D9E75",
+  warn:     "#BA7517",
+  danger:   "#E24B4A",
+  text:     "#16181D",
+  muted:    "#5B6470",
+  mutedHi:  "#8A929E",
 }
 
 const STAGES: { label: string; sublabel: string; icon: string }[] = [
@@ -43,14 +43,14 @@ export function DecisionPipeline({
   return (
     <div style={{
       background: C.card,
-      border: `1px solid ${C.borderHi}`,
+      border: `1px solid ${C.border}`,
       borderRadius: 6,
       padding: "20px 28px 18px",
-      boxShadow: `inset 0 1px 0 ${C.borderHi}`,
+      boxShadow: "0 1px 2px rgba(16,24,40,0.04)",
     }}>
       <style>{`
         @keyframes dp-ring {
-          0%, 100% { transform: scale(1);   opacity: 0.9; }
+          0%, 100% { transform: scale(1);   opacity: 0.6; }
           50%       { transform: scale(1.5); opacity: 0;   }
         }
         @keyframes dp-enter {
@@ -124,12 +124,7 @@ export function DecisionPipeline({
                         ? C.accent + "14"
                         : C.bg,
                     border: `2px solid ${color}`,
-                    boxShadow: isDone
-                      ? `0 0 12px ${C.safe}44, inset 0 0 8px ${C.safe}18`
-                      : isActive
-                        ? `0 0 16px ${C.accent}44, inset 0 0 8px ${C.accent}18`
-                        : "none",
-                    transition: "background 0.5s ease, border-color 0.5s ease, box-shadow 0.5s ease",
+                    transition: "background 0.5s ease, border-color 0.5s ease",
                   }}>
                     <span style={{
                       fontFamily: MONO,
@@ -180,7 +175,6 @@ export function DecisionPipeline({
                   <div style={{
                     position: "absolute", inset: 0,
                     background: C.safe,
-                    boxShadow: `0 0 6px ${C.safe}88`,
                     transformOrigin: "left center",
                     transform: nextDone ? "scaleX(1)" : "scaleX(0)",
                     transition: "transform 0.6s ease",
@@ -227,7 +221,7 @@ export function DecisionPipeline({
           <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
             <span style={{
               display: "inline-block", width: 6, height: 6, borderRadius: "50%",
-              background: C.accent, boxShadow: `0 0 8px ${C.accent}`,
+              background: C.accent,
               animation: "pulse 1.4s ease-in-out infinite",
             }} />
             <span style={{ fontFamily: MONO, fontSize: 9, color: C.mutedHi, letterSpacing: 2 }}>

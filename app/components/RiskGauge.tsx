@@ -7,14 +7,14 @@ const SANS = "'IBM Plex Sans',system-ui,sans-serif"
 
 // Band boundaries match scoreToLevel() in useRiskEngine.ts
 const BANDS = [
-  { max: 30,  color: "#0af5d4" }, // LOW     — cyan
-  { max: 60,  color: "#f5c842" }, // MEDIUM  — gold
-  { max: 85,  color: "#ff9900" }, // HIGH    — orange
-  { max: 100, color: "#ff4567" }, // CRITICAL — red
+  { max: 30,  color: "#1D9E75" }, // LOW      — green
+  { max: 60,  color: "#BA7517" }, // MEDIUM   — amber
+  { max: 85,  color: "#E2820F" }, // HIGH     — orange
+  { max: 100, color: "#E24B4A" }, // CRITICAL — red
 ]
 
 function gaugeColor(score: number): string {
-  return BANDS.find(b => score <= b.max)?.color ?? "#ff4567"
+  return BANDS.find(b => score <= b.max)?.color ?? "#E24B4A"
 }
 
 // SVG geometry
@@ -78,7 +78,7 @@ export function RiskGauge({ score, level }: Props) {
       <div style={{
         fontFamily: MONO,
         fontSize: 9,
-        color: "#3a5a70",
+        color: "#5B6470",
         letterSpacing: 4,
         marginBottom: 6,
         textTransform: "uppercase",
@@ -87,23 +87,11 @@ export function RiskGauge({ score, level }: Props) {
       </div>
 
       <svg width={220} height={220} viewBox="0 0 220 230" style={{ overflow: "visible" }}>
-        {/* Background glow ring — very subtle */}
+        {/* Track (light gray) */}
         <circle
           cx={CX} cy={CY} r={R}
           fill="none"
-          stroke={color}
-          strokeWidth={18}
-          strokeDasharray={`${TRACK_ARC} ${CIRCUMFERENCE - TRACK_ARC}`}
-          strokeDashoffset={DASH_OFFSET}
-          strokeLinecap="round"
-          opacity={0.06}
-        />
-
-        {/* Track (dim) */}
-        <circle
-          cx={CX} cy={CY} r={R}
-          fill="none"
-          stroke="#0e2035"
+          stroke="#E4E6EB"
           strokeWidth={12}
           strokeDasharray={`${TRACK_ARC} ${CIRCUMFERENCE - TRACK_ARC}`}
           strokeDashoffset={DASH_OFFSET}
@@ -120,7 +108,6 @@ export function RiskGauge({ score, level }: Props) {
           strokeDashoffset={DASH_OFFSET}
           strokeLinecap="round"
           style={{
-            filter: `drop-shadow(0 0 7px ${color}99)`,
             transition: "stroke-dasharray 0.9s cubic-bezier(0.4,0,0.2,1), stroke 0.5s ease",
           }}
         />
@@ -135,26 +122,22 @@ export function RiskGauge({ score, level }: Props) {
           fontFamily={MONO}
           fontSize={54}
           fontWeight={700}
-          style={{
-            filter: `drop-shadow(0 0 14px ${color}88)`,
-            transition: "fill 0.5s ease",
-          }}
+          style={{ transition: "fill 0.5s ease" }}
         >
           {displayScore}
         </text>
 
-        {/* Level word */}
+        {/* Level word — muted gray */}
         <text
           x={CX}
           y={CY + 36}
           textAnchor="middle"
           dominantBaseline="middle"
-          fill={color}
+          fill="#5B6470"
           fontFamily={MONO}
           fontSize={11}
           fontWeight={400}
           letterSpacing={3}
-          opacity={0.75}
           style={{ transition: "fill 0.5s ease" }}
         >
           {level || "—"}
@@ -175,13 +158,12 @@ export function RiskGauge({ score, level }: Props) {
               height: 7,
               borderRadius: "50%",
               background: b.color,
-              boxShadow: `0 0 5px ${b.color}`,
-              opacity: score <= b.max ? 1 : 0.3,
+              opacity: score <= b.max ? 1 : 0.25,
             }} />
             <span style={{
               fontFamily: MONO,
               fontSize: 9,
-              color: score <= b.max ? b.color : "#3a5a70",
+              color: score <= b.max ? b.color : "#5B6470",
               letterSpacing: 1,
               transition: "color 0.4s ease",
             }}>

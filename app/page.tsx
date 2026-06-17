@@ -13,16 +13,17 @@ import { RiskGauge } from "@/app/components/RiskGauge"
 import { DecisionPipeline } from "@/app/components/DecisionPipeline"
 import { IntentEngine } from "@/app/components/IntentEngine"
 import { ActionPreview, type ActionIntent } from "@/app/components/ActionPreview"
+import { Landing } from "@/app/components/Landing"
 
 // ─── DESIGN TOKENS ─────────────────────────────────────────────────────────────
 const C = {
-  bg: "#03080f", surface: "#060d16", card: "#08111c",
-  border: "#0e2035", borderHi: "#1a3d5c",
-  accent: "#0af5d4", accentDim: "#07b89c",
-  blue: "#0a7fff", blueDim: "#065ab5",
-  gold: "#f5c842", danger: "#ff4567",
-  warn: "#ff9900", safe: "#00e676",
-  text: "#d0e8f0", muted: "#3a5a70", mutedHi: "#5a7a90",
+  bg: "#FBFBFA", surface: "#F4F5F7", card: "#FFFFFF",
+  border: "#E4E6EB", borderHi: "#D4D8E0",
+  accent: "#1A56DB", accentDim: "#E6F1FB",
+  blue: "#1A56DB", blueDim: "#1245B5",
+  gold: "#BA7517", danger: "#E24B4A",
+  warn: "#BA7517", safe: "#1D9E75",
+  text: "#16181D", muted: "#5B6470", mutedHi: "#8A929E",
 }
 const MONO = "'IBM Plex Mono','Courier New',monospace"
 const SANS = "'IBM Plex Sans',system-ui,sans-serif"
@@ -149,7 +150,6 @@ function simulatedBook(mid: number, levels = 5) {
 function Glow({ children, color = C.accent, size = 13, weight = 600, mono = true, style }: any) {
   const merged: any = {
     fontFamily: mono ? MONO : SANS, color, fontSize: size, fontWeight: weight,
-    textShadow: `0 0 12px ${color}66`,
   }
   return <span style={{ ...merged, ...style }}>{children}</span>
 }
@@ -157,7 +157,6 @@ function Tag({ children, color = C.accent }: any) {
   return <span style={{
     fontFamily: MONO, fontSize: 10, color, border: `1px solid ${color}55`,
     padding: "2px 7px", borderRadius: 2, background: color+"11", letterSpacing: 1,
-    textShadow: `0 0 6px ${color}44`,
   }}>{children}</span>
 }
 function Card({ children, style, glow = false, onClick }: any) {
@@ -165,7 +164,7 @@ function Card({ children, style, glow = false, onClick }: any) {
     background: C.card,
     border: `1px solid ${glow ? C.borderHi : C.border}`,
     borderRadius: 6,
-    boxShadow: glow ? `0 0 24px ${C.accent}14, inset 0 1px 0 ${C.borderHi}` : `inset 0 1px 0 ${C.border}`,
+    boxShadow: glow ? "0 2px 8px rgba(16,24,40,0.08)" : "0 1px 2px rgba(16,24,40,0.04)",
     cursor: onClick ? "pointer" : "default",
     ...style,
   }}>{children}</div>
@@ -176,7 +175,7 @@ function HealthBar({ value, style }: { value: number; style?: any }) {
     <div style={{ height: 4, background: C.border, borderRadius: 2, overflow: "hidden", ...style }}>
       <div style={{
         height: "100%", width: `${value}%`, background: col,
-        boxShadow: `0 0 8px ${col}`, transition: "width 0.6s ease", borderRadius: 2,
+        transition: "width 0.6s ease", borderRadius: 2,
       }} />
     </div>
   )
@@ -220,7 +219,7 @@ function Pill({ label, active, onClick, color = C.accent }: any) {
     background: active ? color+"22" : "transparent",
     border: `1px solid ${active ? color : C.border}`,
     color: active ? color : C.muted, borderRadius: 3,
-    cursor: "pointer", textShadow: active ? `0 0 8px ${color}` : "none",
+    cursor: "pointer",
     transition: "all 0.2s", letterSpacing: 1,
   }}>{label}</button>
 }
@@ -232,7 +231,7 @@ function NetBadge({ phase }: { phase: string }) {
   }}>
     <span style={{
       width: 6, height: 6, borderRadius: "50%", background: net.color,
-      boxShadow: `0 0 8px ${net.color}`, display: "inline-block",
+      display: "inline-block",
     }} />
     <span style={{ fontFamily: MONO, fontSize: 10, color: net.color, letterSpacing: 2 }}>{net.label}</span>
   </div>
@@ -241,10 +240,53 @@ function SectionHeader({ title, sub, action }: any) {
   return (
     <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 14 }}>
       <div>
-        <Glow size={11} style={{ letterSpacing: 3, display: "block", marginBottom: 3 }}>{title}</Glow>
+        <span style={{ fontFamily: SANS, fontSize: 13, fontWeight: 600, color: C.text, display: "block", marginBottom: 3 }}>{title}</span>
         {sub && <span style={{ fontFamily: SANS, fontSize: 12, color: C.mutedHi }}>{sub}</span>}
       </div>
       {action}
+    </div>
+  )
+}
+
+// ─── SCORE BAR ─────────────────────────────────────────────────────────────────
+function ScoreBar({ score, level, demoMode, onToggleDemo }: {
+  score: number; level?: string; demoMode: boolean; onToggleDemo: () => void
+}) {
+  const color = level === "CRITICAL" ? C.danger : level === "HIGH" ? C.warn : level === "MEDIUM" ? C.gold : C.safe
+  return (
+    <div style={{ maxWidth: 560, margin: "0 auto 24px" }}>
+      <div style={{
+        background: C.card, border: `1px solid ${C.border}`, borderRadius: 8,
+        padding: "24px 28px", position: "relative",
+      }}>
+        <div style={{ position: "absolute", top: 14, right: 14, display: "flex", alignItems: "center", gap: 8 }}>
+          {demoMode && (
+            <span style={{ fontFamily: SANS, fontSize: 11, color: C.danger }}>● Simulating crash</span>
+          )}
+          <button onClick={onToggleDemo} style={{
+            fontFamily: SANS, fontSize: 12, padding: "5px 12px",
+            background: demoMode ? C.danger + "14" : "transparent",
+            border: `1px solid ${demoMode ? C.danger + "55" : C.border}`,
+            color: demoMode ? C.danger : C.muted,
+            borderRadius: 6, cursor: "pointer",
+          }}>{demoMode ? "Reset" : "Simulate crash"}</button>
+        </div>
+        <div style={{ display: "flex", alignItems: "baseline", gap: 6, marginBottom: 14 }}>
+          <span style={{ fontFamily: MONO, fontSize: 56, fontWeight: 700, color, lineHeight: 1 }}>{score}</span>
+          <span style={{ fontFamily: MONO, fontSize: 22, color: C.muted }}>/100</span>
+          <span style={{
+            marginLeft: 10, fontFamily: SANS, fontSize: 13, fontWeight: 600, color,
+            background: color + "14", border: `1px solid ${color}44`,
+            padding: "4px 12px", borderRadius: 20,
+          }}>{level ?? "—"}</span>
+        </div>
+        <div style={{ height: 8, background: C.border, borderRadius: 4, overflow: "hidden" }}>
+          <div style={{
+            height: "100%", width: `${score}%`, background: color,
+            borderRadius: 4, transition: "width 0.6s ease",
+          }} />
+        </div>
+      </div>
     </div>
   )
 }
@@ -292,7 +334,7 @@ function PortfolioOverview({ positions, walletConnected }: any) {
   const atRisk    = hasPositions ? positions.filter((p: any) => p.health < 60).length : 0
   const stats = [
     {
-      label: "NET DeFi VALUE",
+      label: "Net DeFi value",
       value: hasPositions ? fmt.usd(netValue) : "$0.00",
       color: C.text,
       sub: hasPositions
@@ -300,19 +342,19 @@ function PortfolioOverview({ positions, walletConnected }: any) {
         : "Connect wallet to load",
     },
     {
-      label: "TOTAL PNL",
+      label: "Total PnL",
       value: hasPositions ? fmt.usd(Math.abs(totalPnl)) : "$0.00",
       color: hasPositions ? (totalPnl >= 0 ? C.safe : C.danger) : C.muted,
       sub: hasPositions ? (totalPnl >= 0 ? "▲ Profitable" : "▼ In loss") : "—",
     },
     {
-      label: "AVG HEALTH",
+      label: "Avg health",
       value: healthPos.length > 0 ? `${avgHealth}%` : "—",
       color: healthPos.length > 0 ? healthColor(avgHealth) : C.muted,
       sub: healthPos.length > 0 ? `Across ${healthPos.length} Navi position${healthPos.length !== 1 ? "s" : ""}` : hasPositions ? "No health data yet" : "—",
     },
     {
-      label: "AT RISK",
+      label: "At risk",
       value: hasPositions ? `${atRisk} pos` : "0 pos",
       color: hasPositions && atRisk > 0 ? C.danger : C.muted,
       sub: "Health < 60%",
@@ -322,7 +364,7 @@ function PortfolioOverview({ positions, walletConnected }: any) {
     <div className="ds-metric-grid">
       {stats.map((s: any) => (
         <Card key={s.label} style={{ padding: "16px 18px" }}>
-          <div style={{ fontFamily: MONO, fontSize: 9, color: C.muted, letterSpacing: 3, marginBottom: 8 }}>{s.label}</div>
+          <div style={{ fontFamily: SANS, fontSize: 11, color: C.muted, marginBottom: 8 }}>{s.label}</div>
           <Glow color={s.color} size={24} weight={700}>
             <span key={s.value} className="ds-num-pop">{s.value}</span>
           </Glow>
@@ -335,10 +377,16 @@ function PortfolioOverview({ positions, walletConnected }: any) {
 
 // ─── POSITION TABLE ────────────────────────────────────────────────────────────
 function PositionTable({ positions, onSelect, selected, walletConnected }: any) {
+  function healthStatus(health: number, protocol: string): { label: string; color: string } | null {
+    if (health === 100 && protocol !== "Navi Protocol") return null
+    if (health >= 80) return { label: `Healthy · ${health}%`, color: C.safe }
+    if (health >= 50) return { label: `Monitor · ${health}%`, color: C.warn }
+    return { label: `At risk · ${health}%`, color: C.danger }
+  }
   return (
     <Card style={{ marginBottom: 16 }}>
       <div style={{ padding: "14px 16px", borderBottom: `1px solid ${C.border}` }}>
-        <SectionHeader title="OPEN POSITIONS" sub={
+        <SectionHeader title="Open positions" sub={
           walletConnected
             ? "Live on-chain data · Sui Mainnet"
             : "Connect wallet to view positions"
@@ -346,12 +394,12 @@ function PositionTable({ positions, onSelect, selected, walletConnected }: any) 
       </div>
       {!walletConnected ? (
         <div style={{ padding: 32, textAlign: "center" }}>
-          <div style={{ fontFamily: MONO, fontSize: 13, color: C.muted, marginBottom: 8 }}>No wallet connected</div>
+          <div style={{ fontFamily: SANS, fontSize: 14, color: C.muted, marginBottom: 8 }}>No wallet connected</div>
           <div style={{ fontFamily: SANS, fontSize: 12, color: C.muted }}>Connect a Sui wallet to load your on-chain positions.</div>
         </div>
       ) : positions.length === 0 ? (
         <div style={{ padding: 32, textAlign: "center" }}>
-          <div style={{ fontFamily: MONO, fontSize: 13, color: C.muted, marginBottom: 8 }}>No DeFi positions found</div>
+          <div style={{ fontFamily: SANS, fontSize: 14, color: C.muted, marginBottom: 8 }}>No DeFi positions found</div>
           <div style={{ fontFamily: SANS, fontSize: 12, color: C.muted }}>No Navi, Scallop, Cetus, or other DeFi protocol positions detected on this wallet.</div>
         </div>
       ) : (
@@ -359,63 +407,67 @@ function PositionTable({ positions, onSelect, selected, walletConnected }: any) 
           <table style={{ width: "100%", borderCollapse: "collapse" }}>
             <thead>
               <tr style={{ borderBottom: `1px solid ${C.border}` }}>
-                {["PROTOCOL","TYPE","ASSET","SIZE","LEVERAGE","HEALTH","PNL",""].map(h => (
+                {["Asset / Protocol", "Value", "Health", ""].map(h => (
                   <th key={h} style={{
-                    fontFamily: MONO, fontSize: 9, color: C.muted, letterSpacing: 2,
-                    padding: "8px 14px", textAlign: "left", fontWeight: 400,
+                    fontFamily: SANS, fontSize: 11, color: C.muted,
+                    padding: "8px 16px", textAlign: "left", fontWeight: 500,
                   }}>{h}</th>
                 ))}
               </tr>
             </thead>
             <tbody>
-              {positions.map((p: any) => (
-                <tr key={p.id} onClick={() => onSelect(p)}
-                  style={{
-                    borderBottom: `1px solid ${C.border}`, cursor: "pointer",
-                    background: selected?.id === p.id ? C.accent+"08" : "transparent",
-                    borderLeft: selected?.id === p.id ? `2px solid ${C.accent}` : "2px solid transparent",
-                    transition: "background 0.15s",
-                  }}>
-                  <td style={{ padding: "12px 14px" }}><span style={{ fontFamily: SANS, fontSize: 12, color: C.text }}>{p.protocol}</span></td>
-                  <td style={{ padding: "12px 14px" }}>
-                    <Tag color={p.type==="SHORT"?C.danger : p.type==="LONG"?C.safe : p.type==="LP"?C.gold : C.blue}>{p.type}</Tag>
-                  </td>
-                  <td style={{ padding: "12px 14px" }}><span style={{ fontFamily: MONO, fontSize: 12, color: C.text }}>{p.asset}</span></td>
-                  <td style={{ padding: "12px 14px" }}>
-                    <span style={{ fontFamily: MONO, fontSize: 12, color: C.text }}>
-                      {p.size > 0 ? fmt.usd(p.size) : p.balStr ? `${parseFloat(p.balStr).toFixed(4)} ${p.asset}` : "—"}
-                    </span>
-                    {p.size > 0 && p.balStr && (
-                      <span style={{ fontFamily: MONO, fontSize: 9, color: C.muted, display: "block", marginTop: 2 }}>
-                        {parseFloat(p.balStr).toFixed(4)} {p.asset}
-                      </span>
-                    )}
-                  </td>
-                  <td style={{ padding: "12px 14px" }}>
-                    <span style={{ fontFamily: MONO, fontSize: 12, color: C.muted }}>—</span>
-                  </td>
-                  <td style={{ padding: "12px 14px", minWidth: 80 }}>
-                    {p.health < 100 || p.protocol === "Navi Protocol" ? (
-                      <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-                        <HealthBar value={p.health} style={{ flex: 1 }} />
-                        <span style={{ fontFamily: MONO, fontSize: 11, color: healthColor(p.health), minWidth: 30 }}>{p.health}%</span>
+              {positions.map((p: any) => {
+                const status = healthStatus(p.health, p.protocol)
+                return (
+                  <tr key={p.id} onClick={() => onSelect(p)}
+                    style={{
+                      borderBottom: `1px solid ${C.border}`, cursor: "pointer",
+                      background: selected?.id === p.id ? `${C.blue}06` : "transparent",
+                      transition: "background 0.15s",
+                    }}>
+                    <td style={{ padding: "13px 16px" }}>
+                      <div style={{ fontFamily: SANS, fontSize: 13, fontWeight: 600, color: C.text, marginBottom: 3 }}>
+                        {p.asset}
                       </div>
-                    ) : (
-                      <span style={{ fontFamily: MONO, fontSize: 12, color: C.muted }}>—</span>
-                    )}
-                  </td>
-                  <td style={{ padding: "12px 14px" }}>
-                    <span style={{ fontFamily: MONO, fontSize: 12, color: C.muted }}>—</span>
-                  </td>
-                  <td style={{ padding: "12px 14px" }}>
-                    <button style={{
-                      fontFamily: MONO, fontSize: 10, padding: "4px 10px",
-                      background: C.accent+"11", border: `1px solid ${C.accent}44`,
-                      color: C.accent, borderRadius: 2, cursor: "pointer", letterSpacing: 1,
-                    }}>ANALYZE →</button>
-                  </td>
-                </tr>
-              ))}
+                      <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                        <span style={{ fontFamily: SANS, fontSize: 11, color: C.muted }}>{p.protocol}</span>
+                        <span style={{
+                          fontFamily: SANS, fontSize: 10, color: C.muted,
+                          background: C.border, padding: "1px 6px", borderRadius: 3,
+                        }}>{p.type}</span>
+                      </div>
+                    </td>
+                    <td style={{ padding: "13px 16px" }}>
+                      <span style={{ fontFamily: MONO, fontSize: 13, color: C.text }}>
+                        {p.size > 0 ? fmt.usd(p.size) : p.balStr ? `${parseFloat(p.balStr).toFixed(4)} ${p.asset}` : "—"}
+                      </span>
+                      {p.size > 0 && p.balStr && (
+                        <span style={{ fontFamily: MONO, fontSize: 10, color: C.muted, display: "block", marginTop: 2 }}>
+                          {parseFloat(p.balStr).toFixed(4)} {p.asset}
+                        </span>
+                      )}
+                    </td>
+                    <td style={{ padding: "13px 16px" }}>
+                      {status ? (
+                        <span style={{
+                          fontFamily: SANS, fontSize: 12, fontWeight: 600, color: status.color,
+                          background: status.color + "12", border: `1px solid ${status.color}33`,
+                          padding: "4px 12px", borderRadius: 20, whiteSpace: "nowrap",
+                        }}>{status.label}</span>
+                      ) : (
+                        <span style={{ fontFamily: SANS, fontSize: 12, color: C.muted }}>—</span>
+                      )}
+                    </td>
+                    <td style={{ padding: "13px 16px" }}>
+                      <button style={{
+                        fontFamily: SANS, fontSize: 12, padding: "6px 14px",
+                        background: C.card, border: `1px solid ${C.border}`,
+                        color: C.text, borderRadius: 6, cursor: "pointer", fontWeight: 500,
+                      }}>Analyze</button>
+                    </td>
+                  </tr>
+                )
+              })}
             </tbody>
           </table>
         </div>
@@ -430,7 +482,7 @@ function DeepBookPanel({ selectedPool }: any) {
     return (
       <Card>
         <div style={{ padding: "14px 16px", borderBottom: `1px solid ${C.border}` }}>
-          <SectionHeader title="DEEPBOOK ORDERBOOK" sub="Waiting for price data…" />
+          <SectionHeader title="DeepBook orderbook" sub="Waiting for price data…" />
         </div>
         <div style={{ padding: 32, textAlign: "center", fontFamily: MONO, fontSize: 12, color: C.muted, animation: "pulse 1.2s infinite" }}>
           Loading live prices…
@@ -446,12 +498,12 @@ function DeepBookPanel({ selectedPool }: any) {
     <Card>
       <div style={{ padding: "14px 16px", borderBottom: `1px solid ${C.border}` }}>
         <SectionHeader
-          title="DEEPBOOK ORDERBOOK"
+          title="DeepBook orderbook"
           sub={`${selectedPool.base}/${selectedPool.quote} · CLOB · Simulated orderbook visualization`}
         />
         <div style={{ display: "flex", gap: 16, alignItems: "center" }}>
           <div>
-            <div style={{ fontFamily: MONO, fontSize: 9, color: C.muted, letterSpacing: 2 }}>SPREAD</div>
+            <div style={{ fontFamily: SANS, fontSize: 11, color: C.muted }}>Spread</div>
             <div style={{ fontFamily: MONO, fontSize: 12, color: C.text }}>{selectedPool.spread}%</div>
           </div>
           <div style={{
@@ -499,7 +551,7 @@ function RiskFeed({ events, walletConnected }: { events: any[]; walletConnected:
   return (
     <Card>
       <div style={{ padding: "14px 16px", borderBottom: `1px solid ${C.border}` }}>
-        <SectionHeader title="RISK EVENT FEED" sub="AI-detected anomalies · Real-time" />
+        <SectionHeader title="Risk event feed" sub="AI-detected anomalies · Real-time" />
       </div>
       {!walletConnected ? (
         <div style={{ padding: "24px 16px", textAlign: "center" }}>
@@ -518,7 +570,7 @@ function RiskFeed({ events, walletConnected }: { events: any[]; walletConnected:
           }}>
             <div style={{
               width: 3, alignSelf: "stretch", background: sevColor(e.severity),
-              borderRadius: 2, flexShrink: 0, boxShadow: `0 0 6px ${sevColor(e.severity)}`,
+              borderRadius: 2, flexShrink: 0,
             }} />
             <div style={{ flex: 1 }}>
               <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 4 }}>
@@ -598,7 +650,7 @@ Be precise and educational. Format with clear headers.`
   return (
     <Card>
       <div style={{ padding: "14px 16px", borderBottom: `1px solid ${C.border}` }}>
-        <SectionHeader title="SCENARIO SIMULATOR" sub="AI stress-test your portfolio" />
+        <SectionHeader title="Scenario simulator" sub="AI stress-test your portfolio" />
       </div>
       <div style={{ padding: 16 }}>
         <div style={{ marginBottom: 16 }}>
@@ -618,27 +670,33 @@ Be precise and educational. Format with clear headers.`
           </div>
         </div>
 
-        {/* Quick-status cards — only for positions with a liquidation price */}
+        {/* Quick-status rows — only for positions with a liquidation price */}
         {positions.filter((p: any) => p.liquidationPrice && p.entryPrice).length > 0 && (
-          <div style={{ display: "grid", gridTemplateColumns: "repeat(3,1fr)", gap: 8, marginBottom: 14 }}>
-            {positions.filter((p: any) => p.liquidationPrice && p.entryPrice).map((p: any) => {
+          <div style={{ border: `1px solid ${C.border}`, borderRadius: 6, overflow: "hidden", marginBottom: 14 }}>
+            {positions.filter((p: any) => p.liquidationPrice && p.entryPrice).map((p: any, i: number, arr: any[]) => {
               const crashPrice = (p.entryPrice as number) * (1 - drop / 100)
               const liq = p.liquidationPrice as number
               const willLiq = p.type === "LONG" ? crashPrice < liq : crashPrice > liq
+              const atRisk = !willLiq && (p.type === "LONG" ? crashPrice < liq * 1.2 : crashPrice > liq * 0.8)
+              const rowBg = willLiq ? "#FCEBEB" : atRisk ? "#FAEEDA" : "#E1F5EE"
+              const statusColor = willLiq ? C.danger : atRisk ? C.warn : C.safe
+              const statusWord = willLiq ? "Liquidated" : atRisk ? "At risk" : "Safe"
               return (
                 <div key={p.id} style={{
-                  padding: "10px 12px",
-                  background: willLiq ? C.danger+"11" : C.safe+"08",
-                  border: `1px solid ${willLiq ? C.danger+"44" : C.border}`,
-                  borderRadius: 4,
+                  padding: "12px 16px", background: rowBg,
+                  borderBottom: i < arr.length - 1 ? `1px solid ${C.border}` : "none",
+                  display: "flex", justifyContent: "space-between", alignItems: "center",
                 }}>
-                  <div style={{ fontFamily: MONO, fontSize: 10, color: C.mutedHi, marginBottom: 4 }}>{p.asset}</div>
-                  <div style={{ fontFamily: SANS, fontSize: 11, color: willLiq ? C.danger : C.safe, fontWeight: 600 }}>
-                    {willLiq ? "⚠ LIQUIDATED" : "✓ SURVIVES"}
+                  <div>
+                    <span style={{ fontFamily: SANS, fontSize: 13, fontWeight: 600, color: C.text }}>{p.asset}</span>
+                    <span style={{ fontFamily: SANS, fontSize: 11, color: C.muted, marginLeft: 8 }}>{p.protocol}</span>
+                    <div style={{ fontFamily: MONO, fontSize: 11, color: C.muted, marginTop: 3 }}>
+                      Crash: ~{fmt.usd(Number(crashPrice.toFixed(2)))} · Liq: {fmt.usd(liq)}
+                    </div>
                   </div>
-                  <div style={{ fontFamily: MONO, fontSize: 10, color: C.muted, marginTop: 3 }}>
-                    Crash: ~{fmt.usd(Number(crashPrice.toFixed(4)))} / Liq: {Number(liq).toLocaleString()}
-                  </div>
+                  <span style={{ fontFamily: SANS, fontSize: 14, fontWeight: 700, color: statusColor }}>
+                    {statusWord}
+                  </span>
                 </div>
               )
             })}
@@ -646,16 +704,15 @@ Be precise and educational. Format with clear headers.`
         )}
 
         <button onClick={simulate} disabled={loading} style={{
-          width: "100%", padding: "11px",
-          background: loading ? C.border : `linear-gradient(135deg,${C.accent}22,${C.blue}22)`,
-          border: `1px solid ${loading ? C.muted : C.accent}`,
-          color: loading ? C.muted : C.accent,
-          fontFamily: MONO, fontSize: 12, fontWeight: 700,
-          letterSpacing: 2, borderRadius: 4,
+          width: "100%", padding: "12px",
+          background: loading ? C.border : C.blue,
+          border: `1px solid ${loading ? C.border : C.blue}`,
+          color: loading ? C.muted : "#fff",
+          fontFamily: SANS, fontSize: 14, fontWeight: 600,
+          borderRadius: 6, cursor: loading ? "not-allowed" : "pointer",
           marginBottom: result ? 14 : 0,
-          textShadow: loading ? "none" : `0 0 8px ${C.accent}`,
         }}>
-          {loading ? "[ RUNNING SIMULATION… ]" : "[ RUN AI STRESS TEST ]"}
+          {loading ? "Running simulation…" : "Run AI stress test"}
         </button>
 
         {result && (
@@ -673,24 +730,74 @@ Be precise and educational. Format with clear headers.`
 // ─── AI ADVISOR CHAT ────────────────────────────────────────────────────────────
 
 // Strip the optional ```action block from an AI reply and return both parts.
+// parseActionBlock — tolerant extraction of the model's optional action signal.
+//
+// Accepted formats (in priority order):
+//   1. ```action\n{...}\n```   — fenced, canonical
+//   2. {..."action":...}       — bare JSON object containing "action" key
+//   3. single-quoted keys/values, trailing commas — normalised before parse
+//
+// On total failure: returns { cleanText: original text, actionJson: null } — never throws.
+//
+// Test corpus (5/6 must parse; #6 must return null):
+// const _PARSE_TESTS = [
+//   /* 1 fenced canonical  */ '```action\n{"action":"update_risk_score","score":72}\n```',
+//   /* 2 fenced no newline */ '```action{"action":"update_risk_score","score":55}```',
+//   /* 3 bare JSON         */ 'You should sync. {"action":"update_risk_score","score":60}',
+//   /* 4 single quotes     */ "```action\n{'action':'update_risk_score','score':45}\n```",
+//   /* 5 trailing comma    */ '```action\n{"action":"update_risk_score","score":80,}\n```',
+//   /* 6 malformed / null  */ '```action\nnot json at all\n```',
+// ]
+// _PARSE_TESTS.forEach((t, i) => {
+//   const r = parseActionBlock(t)
+//   console.assert(i === 5 ? r.actionJson === null : r.actionJson !== null, `test ${i + 1} failed`, r)
+// })
 function parseActionBlock(text: string): { cleanText: string; actionJson: Record<string, unknown> | null } {
-  const m = text.match(/```action\s*([\s\S]*?)```\s*$/)
-  if (!m) return { cleanText: text, actionJson: null }
-  try {
-    return { cleanText: text.slice(0, m.index).trimEnd(), actionJson: JSON.parse(m[1].trim()) }
-  } catch {
-    return { cleanText: text, actionJson: null }
+  // Normalise raw candidate string before JSON.parse
+  function tryParse(raw: string): Record<string, unknown> | null {
+    const normalised = raw
+      .trim()
+      .replace(/'/g, '"')            // single → double quotes
+      .replace(/,\s*([}\]])/g, "$1") // trailing commas
+    try {
+      const obj = JSON.parse(normalised)
+      if (obj && typeof obj === "object" && !Array.isArray(obj)) return obj as Record<string, unknown>
+    } catch { /* fall through */ }
+    return null
   }
+
+  // Priority 1: fenced block (with or without newline after opening fence)
+  const fenced = text.match(/```action\s*([\s\S]*?)```/)
+  if (fenced) {
+    const obj = tryParse(fenced[1])
+    const cleanText = text.slice(0, fenced.index).trimEnd()
+    return { cleanText: cleanText || text, actionJson: obj }
+  }
+
+  // Priority 2: bare JSON object containing an "action" key anywhere in the text
+  const bare = text.match(/\{[^{}]*"action"\s*:[^{}]*\}/)
+  if (bare) {
+    const obj = tryParse(bare[0])
+    if (obj) {
+      const cleanText = (text.slice(0, bare.index) + text.slice((bare.index ?? 0) + bare[0].length)).trimEnd()
+      return { cleanText: cleanText || text, actionJson: obj }
+    }
+  }
+
+  return { cleanText: text, actionJson: null }
 }
 
 // Map a parsed action object to an ActionIntent (guardian-only for now — no user funds moved).
+// IMPORTANT: the model's job is to signal *whether* to act, not to supply numbers.
+// riskScore and policyState always come from our live engine — never from actionJson.
 function buildGuardianIntent(
   actionJson: Record<string, unknown>,
-  riskScore: number,
+  riskScore: number,           // live value from useRiskEngine — NOT from the model
   policyState: { risk_score: number } | null,
 ): ActionIntent | null {
   if (actionJson.action === "update_risk_score") {
-    const score = typeof actionJson.score === "number" ? actionJson.score : riskScore
+    // Discard actionJson.score — our engine owns this number.
+    const score = riskScore
     const prev  = policyState?.risk_score ?? score
     return {
       protocol:      "RiskGuardian · Sui Testnet",
@@ -800,11 +907,14 @@ ${pools.length > 0
 Answer grounded in THIS user's specific situation. Reference their actual assets, protocol positions, and risk factors by name. When policy is paused or score is HIGH/CRITICAL, highlight urgency and concrete steps. Be conversational but precise. Keep responses under 200 words. You understand Sui's object model, Move contracts, and DeepBook CLOB mechanics.
 
 ## ACTION OUTPUT (optional)
-When you are explicitly telling the user to take a specific on-chain action RIGHT NOW — not just mentioning it as a possibility — append this block at the very end of your reply on its own line, after your text:
+When you are explicitly telling the user to take a specific on-chain action RIGHT NOW — not just mentioning it as a possibility — append this exact block at the very end of your reply, after your prose:
 \`\`\`action
-{"action":"update_risk_score","score":${ra?.score ?? 0},"reason":"<one sentence why>"}
+{"action":"update_risk_score","reason":"<one sentence why>"}
 \`\`\`
-Only emit this block for a concrete recommendation. Omit entirely for analysis, explanations, or general advice. The only supported action is "update_risk_score".`
+Rules:
+- Omit entirely for analysis, explanations, or general advice.
+- The only supported action is "update_risk_score".
+- Do NOT include a "score" field — our system always uses the live engine value (currently ${ra?.score ?? 0}/100). Any score you invent will be ignored.`
 
     try {
       const res = await fetch("/api/advisor", {
@@ -831,7 +941,7 @@ Only emit this block for a concrete recommendation. Omit entirely for analysis, 
   return (
     <Card style={{ display: "flex", flexDirection: "column", height: "100%" }}>
       <div style={{ padding: "14px 16px", borderBottom: `1px solid ${C.border}` }}>
-        <SectionHeader title="AI RISK ADVISOR" sub={"Powered by Llama 3.3 · Context-aware · Portfolio-specific"} />
+        <SectionHeader title="AI risk advisor" sub={"Powered by Llama 3.3 · Context-aware · Portfolio-specific"} />
       </div>
       <div style={{
         flex: 1, overflowY: "auto", padding: 14, display: "flex", flexDirection: "column",
@@ -841,21 +951,22 @@ Only emit this block for a concrete recommendation. Omit entirely for analysis, 
           <div key={i} style={{ display: "flex", flexDirection: "column", gap: 8 }}>
             {/* Message bubble row */}
             <div style={{
-              display: "flex", flexDirection: m.role === "user" ? "row-reverse" : "row", gap: 10,
+              display: "flex", flexDirection: m.role === "user" ? "row-reverse" : "row", gap: 8,
             }}>
               <div style={{
-                width: 28, height: 28, borderRadius: "50%", flexShrink: 0,
-                background: m.role === "user" ? C.blue+"33" : C.accent+"22",
-                border: `1px solid ${m.role === "user" ? C.blue+"55" : C.accent+"44"}`,
+                width: 26, height: 26, borderRadius: "50%", flexShrink: 0,
+                background: m.role === "user" ? C.blue : C.border,
                 display: "flex", alignItems: "center", justifyContent: "center",
-                fontFamily: MONO, fontSize: 9, color: m.role === "user" ? C.blue : C.accent,
-              }}>{m.role === "user" ? "YOU" : "AI"}</div>
+                fontFamily: SANS, fontSize: 10, fontWeight: 600,
+                color: m.role === "user" ? "#fff" : C.muted,
+              }}>{m.role === "user" ? "Y" : "AI"}</div>
               <div style={{
-                maxWidth: "82%", padding: "10px 13px", borderRadius: 6,
-                background: m.role === "user" ? C.blue+"14" : C.card,
-                border: `1px solid ${m.role === "user" ? C.blue+"33" : C.border}`,
-                fontFamily: SANS, fontSize: 12, color: C.text, lineHeight: 1.7,
-                whiteSpace: "pre-wrap",
+                maxWidth: "82%", padding: "10px 14px", borderRadius: 16,
+                background: m.role === "user" ? C.blue : C.surface,
+                border: "none",
+                fontFamily: SANS, fontSize: 13,
+                color: m.role === "user" ? "#fff" : C.text,
+                lineHeight: 1.7, whiteSpace: "pre-wrap",
               }}>{m.text}</div>
             </div>
             {/* Inline ActionPreview — shown when AI attaches a guardian intent */}
@@ -876,15 +987,15 @@ Only emit this block for a concrete recommendation. Omit entirely for analysis, 
           </div>
         ))}
         {loading && (
-          <div style={{ display: "flex", gap: 10 }}>
+          <div style={{ display: "flex", gap: 8 }}>
             <div style={{
-              width: 28, height: 28, borderRadius: "50%", background: C.accent+"22",
-              border: `1px solid ${C.accent}44`, display: "flex", alignItems: "center",
-              justifyContent: "center", fontFamily: MONO, fontSize: 9, color: C.accent,
+              width: 26, height: 26, borderRadius: "50%", background: C.border,
+              display: "flex", alignItems: "center", justifyContent: "center",
+              fontFamily: SANS, fontSize: 10, fontWeight: 600, color: C.muted,
             }}>AI</div>
             <div style={{
-              padding: "10px 13px", borderRadius: 6, background: C.card,
-              border: `1px solid ${C.border}`, fontFamily: MONO, fontSize: 11, color: C.accent,
+              padding: "10px 14px", borderRadius: 16, background: C.surface,
+              fontFamily: SANS, fontSize: 13, color: C.muted,
               animation: "pulse 1.2s infinite",
             }}>Analyzing positions…</div>
           </div>
@@ -895,9 +1006,9 @@ Only emit this block for a concrete recommendation. Omit entirely for analysis, 
         <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
           {SUGGESTIONS.map(s => (
             <button key={s} onClick={() => send(s)} style={{
-              fontFamily: SANS, fontSize: 11, padding: "4px 10px",
-              background: C.surface, border: `1px solid ${C.border}`,
-              color: C.mutedHi, borderRadius: 12, cursor: "pointer",
+              fontFamily: SANS, fontSize: 12, padding: "5px 12px",
+              background: C.card, border: `1px solid ${C.border}`,
+              color: C.muted, borderRadius: 20, cursor: "pointer",
             }}>{s}</button>
           ))}
         </div>
@@ -909,16 +1020,20 @@ Only emit this block for a concrete recommendation. Omit entirely for analysis, 
           onKeyDown={e => e.key === "Enter" && send()}
           placeholder="Ask about your positions, risk, strategy…"
           style={{
-            flex: 1, background: C.bg, border: `1px solid ${C.borderHi}`,
-            color: C.text, fontFamily: SANS, fontSize: 13, padding: "10px 14px",
-            borderRadius: 4, outline: "none",
+            flex: 1, background: C.card, border: `1px solid ${C.border}`,
+            color: C.text, fontFamily: SANS, fontSize: 13, padding: "10px 16px",
+            borderRadius: 24, outline: "none",
           }}
         />
         <button onClick={() => send()} disabled={loading || !input.trim()} style={{
-          padding: "10px 20px", background: C.accent+"22", border: `1px solid ${C.accent}`,
-          color: C.accent, fontFamily: MONO, fontSize: 11, fontWeight: 700,
-          letterSpacing: 1, borderRadius: 4, cursor: "pointer",
-        }}>SEND</button>
+          width: 44, height: 44, padding: 0, flexShrink: 0,
+          background: loading || !input.trim() ? C.border : C.blue,
+          border: "none", borderRadius: "50%",
+          cursor: loading || !input.trim() ? "not-allowed" : "pointer",
+          display: "flex", alignItems: "center", justifyContent: "center",
+          color: loading || !input.trim() ? C.muted : "#fff",
+          fontSize: 18, transition: "background 0.15s",
+        }}>→</button>
       </div>
     </Card>
   )
@@ -945,7 +1060,7 @@ function TradingPanel({ pool, network }: any) {
   return (
     <Card>
       <div style={{ padding: "14px 16px", borderBottom: `1px solid ${C.border}` }}>
-        <SectionHeader title="DEEPBOOK TRADING" sub={`${pool.base}/${pool.quote} · ${network.toUpperCase()} · Simulated execution`} />
+        <SectionHeader title="DeepBook trading" sub={`${pool.base}/${pool.quote} · ${network.toUpperCase()} · Simulated execution`} />
       </div>
       <div style={{ padding: 16 }}>
         <div style={{ display: "flex", gap: 6, marginBottom: 14 }}>
@@ -1013,7 +1128,6 @@ function TradingPanel({ pool, network }: any) {
             color: side==="BUY"?C.safe:C.danger,
             fontFamily: MONO, fontSize: 13, fontWeight: 700, letterSpacing: 2,
             borderRadius: 4,
-            textShadow: `0 0 8px ${side==="BUY"?C.safe:C.danger}`,
           }}>{side} {pool.base} · {lev}x</button>
         )}
         <div style={{
@@ -1052,15 +1166,6 @@ function WalletBar({ network, setNetwork }: any) {
         ))}
       </div>
       <div style={{ flex: 1 }} />
-      <DappConnectButton
-        connectText="CONNECT WALLET"
-        style={{
-          fontFamily: MONO, fontSize: 11, padding: "7px 20px",
-          background: C.accent+"22", border: `1px solid ${C.accent}`,
-          color: C.accent, borderRadius: 3, cursor: "pointer",
-          fontWeight: 700, letterSpacing: 1,
-        } as any}
-      />
     </div>
   )
 }
@@ -1101,6 +1206,7 @@ function generateRiskEvents(positions: any[]): any[] {
 
 // ─── ROOT APP ──────────────────────────────────────────────────────────────────
 export default function DeepSenseClientPage() {
+  const [launched, setLaunched]     = useState(false)
   const [tab, setTab]               = useState("dashboard")
   const [moreOpen, setMoreOpen]     = useState(false)
   const [network, setNetwork]       = useState("mainnet")
@@ -1309,6 +1415,8 @@ export default function DeepSenseClientPage() {
   const net = NET[network as keyof typeof NET]
   const isCritical = riskAssessment?.level === "CRITICAL"
 
+  if (!launched) return <Landing onLaunch={() => setLaunched(true)} />
+
   return (
     <div style={{ minHeight: "100vh", background: C.bg, color: C.text }}>
       {/* Critical viewport glow — fixed overlay, pointer-events:none, fades in/out */}
@@ -1326,98 +1434,66 @@ export default function DeepSenseClientPage() {
       {/* Header */}
       <div style={{
         borderBottom: `1px solid ${C.border}`,
-        background: C.surface, display: "flex", alignItems: "center",
-        flexWrap: "wrap", padding: "0 24px", gap: 0, minWidth: 0,
+        background: C.card, display: "flex", alignItems: "center",
+        padding: "0 24px", gap: 0, minWidth: 0, height: 56,
       }}>
-        {/* Logo — stays pinned left, never shrinks */}
+        {/* Logo */}
         <div style={{
-          padding: "14px 0", marginRight: 24, borderRight: `1px solid ${C.border}`,
-          paddingRight: 24, flexShrink: 0,
+          display: "flex", alignItems: "center", gap: 8, flexShrink: 0,
+          paddingRight: 20, marginRight: 12, borderRight: `1px solid ${C.border}`,
         }}>
-          <div style={{ display: "flex", alignItems: "baseline", gap: 4 }}>
-            <Glow size={18} weight={800} style={{ letterSpacing: 4 }}>DEEP</Glow>
-            <Glow size={18} weight={800} color={C.gold} style={{ letterSpacing: 4 }}>SENSE</Glow>
-          </div>
-          <div style={{ fontFamily: MONO, fontSize: 9, color: C.muted, letterSpacing: 3, marginTop: 2 }}>
-            AI · SUI · DEEPBOOK
-          </div>
+          <div style={{
+            width: 28, height: 28, borderRadius: 5, background: C.blue,
+            display: "flex", alignItems: "center", justifyContent: "center",
+            fontFamily: MONO, fontSize: 11, fontWeight: 700, color: "#fff", letterSpacing: 0.5,
+          }}>DS</div>
+          <span style={{ fontFamily: SANS, fontSize: 15, fontWeight: 700, color: C.text }}>DeepSense</span>
         </div>
-        {/* Tab bar — scrolls horizontally on narrow viewports */}
-        <div className="ds-tabbar">
+        {/* Primary pill tabs */}
+        <div style={{ display: "flex", alignItems: "center", gap: 2, padding: "0 12px", flexShrink: 0 }}>
           {[
-            { id: "dashboard", label: "DASHBOARD"  },
-            { id: "guardian",  label: "GUARDIAN"   },
-            { id: "positions", label: "POSITIONS"  },
-            { id: "intent",    label: "INTENT"     },
-            { id: "advisor",   label: "AI ADVISOR" },
+            { id: "dashboard", label: "Dashboard" },
+            { id: "advisor",   label: "AI advisor" },
+            { id: "simulator", label: "Simulator"  },
+            { id: "positions", label: "Positions"  },
           ].map(t => (
             <button key={t.id} onClick={() => { setTab(t.id); setMoreOpen(false) }} style={{
-              fontFamily: MONO, fontSize: 11, padding: "18px 14px",
-              background: "none", border: "none", flexShrink: 0,
-              borderBottom: tab === t.id ? `2px solid ${C.accent}` : "2px solid transparent",
-              color: tab === t.id ? C.accent : C.muted, cursor: "pointer",
-              letterSpacing: 1, transition: "all 0.2s",
-              textShadow: tab === t.id ? `0 0 8px ${C.accent}` : "none",
+              fontFamily: SANS, fontSize: 13, fontWeight: tab === t.id ? 600 : 400,
+              padding: "6px 14px", borderRadius: 20, cursor: "pointer",
+              background: tab === t.id ? C.card : "transparent",
+              border: `1px solid ${tab === t.id ? C.border : "transparent"}`,
+              color: tab === t.id ? C.text : C.muted,
+              boxShadow: tab === t.id ? "0 1px 3px rgba(16,24,40,0.06)" : "none",
+              transition: "all 0.15s",
             }}>{t.label}</button>
           ))}
-
-          {/* ── More dropdown ─────────────────────────────────────────────── */}
-          {(() => {
-            const MORE_TABS = [
-              { id: "deepbook",     label: "DEEPBOOK"  },
-              { id: "simulator",    label: "SIMULATOR" },
-              { id: "architecture", label: "ARCHITECT" },
-            ]
-            const moreActive = MORE_TABS.some(t => t.id === tab)
-            const btnColor = (moreActive || moreOpen) ? C.accent : C.muted
-            return (
-              <div style={{ position: "relative", flexShrink: 0 }}>
-                <button
-                  onClick={() => setMoreOpen(o => !o)}
-                  style={{
-                    fontFamily: MONO, fontSize: 11, padding: "18px 14px",
-                    background: "none", border: "none",
-                    borderBottom: (moreActive || moreOpen) ? `2px solid ${C.accent}` : "2px solid transparent",
-                    color: btnColor, cursor: "pointer", letterSpacing: 1,
-                    transition: "all 0.2s",
-                    textShadow: (moreActive || moreOpen) ? `0 0 8px ${C.accent}` : "none",
-                  }}
-                >
-                  MORE {moreOpen ? "▴" : "▾"}
-                </button>
-                {moreOpen && (
-                  <div style={{
-                    position: "absolute", top: "100%", left: 0, zIndex: 200,
-                    background: C.card, border: `1px solid ${C.borderHi}`,
-                    borderRadius: 4, minWidth: 148,
-                    boxShadow: "0 8px 24px rgba(0,0,0,0.55)",
-                    overflow: "hidden",
-                  }}>
-                    {MORE_TABS.map((t, i) => (
-                      <button key={t.id} onClick={() => { setTab(t.id); setMoreOpen(false) }} style={{
-                        display: "block", width: "100%", textAlign: "left",
-                        fontFamily: MONO, fontSize: 11, padding: "11px 16px",
-                        background: tab === t.id ? C.accent + "14" : "none",
-                        border: "none",
-                        borderBottom: i < MORE_TABS.length - 1 ? `1px solid ${C.border}` : "none",
-                        color: tab === t.id ? C.accent : C.text,
-                        cursor: "pointer", letterSpacing: 1, transition: "background 0.15s",
-                      }}>{t.label}</button>
-                    ))}
-                  </div>
-                )}
-              </div>
-            )
-          })()}
         </div>
-        {/* Net badge — shrinks away on very small screens */}
-        <div style={{ flexShrink: 0, paddingLeft: 12 }}>
+        {/* Spacer */}
+        <div style={{ flex: 1 }} />
+        {/* Wallet pill + net badge */}
+        <div style={{ display: "flex", alignItems: "center", gap: 10, flexShrink: 0 }}>
           <NetBadge phase={network} />
+          {isWalletConnected ? (
+            <div style={{
+              display: "inline-flex", alignItems: "center", gap: 6,
+              background: C.card, border: `1px solid ${C.border}`,
+              borderRadius: 20, padding: "5px 12px",
+            }}>
+              <div style={{ width: 6, height: 6, borderRadius: "50%", background: C.safe, flexShrink: 0 }} />
+              <span style={{ fontFamily: MONO, fontSize: 11, color: C.text }}>{fmt.addr(walletAddr ?? undefined)}</span>
+            </div>
+          ) : (
+            <DappConnectButton
+              connectText="Connect wallet"
+              style={{
+                fontFamily: SANS, fontSize: 13, padding: "7px 16px",
+                background: C.blue, border: `1px solid ${C.blue}`,
+                color: "#fff", borderRadius: 6, cursor: "pointer", fontWeight: 600,
+              } as any}
+            />
+          )}
         </div>
       </div>
-
-      {/* Wallet Bar */}
-      <WalletBar network={network} setNetwork={setNetwork} />
 
       {/* Ticker */}
       <LiveTicker pools={pools} />
@@ -1444,21 +1520,21 @@ export default function DeepSenseClientPage() {
             {/* Live dot — breathes gently always, faster when elevated */}
             <span style={{
               display: "inline-block", width: 7, height: 7, borderRadius: "50%",
-              background: dot, boxShadow: `0 0 8px ${dot}`,
+              background: dot,
               flexShrink: 0, marginRight: 14,
               animation: `dot-breathe ${score >= 86 ? 1.4 : score >= 61 ? 2 : 3.5}s ease-in-out infinite`,
             }} />
 
             {/* Positions */}
-            <span style={{ color: C.muted, marginRight: 5 }}>MONITORING</span>
-            <span style={{ color: C.text, marginRight: 14 }}>{positions.length} position{positions.length !== 1 ? "s" : ""}</span>
+            <span style={{ fontFamily: SANS, color: C.muted, marginRight: 5 }}>Monitoring</span>
+            <span style={{ fontFamily: MONO, color: C.text, marginRight: 14 }}>{positions.length} position{positions.length !== 1 ? "s" : ""}</span>
 
             <span style={{ color: C.border, marginRight: 14, userSelect: "none" }}>│</span>
 
             {/* Risk score + level — number pops when score changes */}
-            <span style={{ color: C.muted, marginRight: 5 }}>RISK</span>
-            <span key={score} className="ds-num-pop" style={{ color: dot, marginRight: 3 }}>{score}</span>
-            <span style={{ color: C.muted, marginRight: 5 }}>/100</span>
+            <span style={{ fontFamily: SANS, color: C.muted, marginRight: 5 }}>Risk</span>
+            <span key={score} className="ds-num-pop" style={{ fontFamily: MONO, color: dot, marginRight: 3 }}>{score}</span>
+            <span style={{ fontFamily: MONO, color: C.muted, marginRight: 5 }}>/100</span>
             <span key={lvl} style={{
               color: dot, letterSpacing: 1,
               padding: "1px 6px",
@@ -1473,7 +1549,7 @@ export default function DeepSenseClientPage() {
             <span style={{ color: C.border, marginRight: 14, userSelect: "none" }}>│</span>
 
             {/* Last AI action */}
-            <span style={{ color: C.muted, marginRight: 5 }}>LAST AI ACTION</span>
+            <span style={{ fontFamily: SANS, color: C.muted, marginRight: 5 }}>Last AI action</span>
             <span style={{ color: lastAction ? C.text : C.muted }}>{fmtAgo(lastAction, nowMs)}</span>
 
             {/* Spacer */}
@@ -1496,44 +1572,13 @@ export default function DeepSenseClientPage() {
         {/* DASHBOARD TAB */}
         {tab === "dashboard" && (
           <>
-            {/* ── Risk Gauge centerpiece + demo toggle ── */}
-            <div style={{
-              position: "relative", display: "flex", justifyContent: "center", marginBottom: 8,
-              animation: isCritical ? "gauge-pulse 2.8s ease-in-out infinite" : "none",
-              transformOrigin: "center center",
-            }}>
-              <RiskGauge
-                score={riskAssessment?.score ?? 0}
-                level={riskAssessment?.level ?? "—"}
-              />
-              {/* Demo controls — top-right of the gauge area */}
-              <div style={{
-                position: "absolute", top: 0, right: 0,
-                display: "flex", alignItems: "center", gap: 8,
-              }}>
-                {demoMode && (
-                  <span style={{
-                    fontFamily: MONO, fontSize: 9, color: C.danger,
-                    letterSpacing: 2, opacity: 0.8,
-                    animation: "pulse 1.4s ease-in-out infinite",
-                  }}>● SIMULATING</span>
-                )}
-                <button
-                  onClick={() => setDemoMode(d => !d)}
-                  style={{
-                    fontFamily: MONO, fontSize: 10, letterSpacing: 1,
-                    padding: "5px 12px",
-                    background: demoMode ? C.danger + "18" : "transparent",
-                    border: `1px solid ${demoMode ? C.danger + "66" : C.border}`,
-                    color: demoMode ? C.danger : C.muted,
-                    borderRadius: 3, cursor: "pointer",
-                    transition: "all 0.25s",
-                  }}
-                >
-                  {demoMode ? "RESET" : "SIMULATE CRASH"}
-                </button>
-              </div>
-            </div>
+            {/* ── Score bar centerpiece ── */}
+            <ScoreBar
+              score={riskAssessment?.score ?? 0}
+              level={riskAssessment?.level}
+              demoMode={demoMode}
+              onToggleDemo={() => setDemoMode(d => !d)}
+            />
 
             {/* ── Risk factors list ── */}
             {(() => {
@@ -1636,7 +1681,6 @@ export default function DeepSenseClientPage() {
                     background: C.accent+"22", border: `1px solid ${C.accent}`,
                     color: C.accent, borderRadius: 4, cursor: "pointer",
                     letterSpacing: 2, fontWeight: 700,
-                    textShadow: `0 0 12px ${C.accent}88`,
                   } as any}
                 />
                 <div style={{ fontFamily: SANS, fontSize: 11, color: C.muted, marginTop: 14 }}>
@@ -1709,7 +1753,7 @@ export default function DeepSenseClientPage() {
                 <Card>
                   <div style={{ padding: "14px 16px", borderBottom: `1px solid ${C.border}`, display: "flex", justifyContent: "space-between", alignItems: "center" }}>
                     <div>
-                      <Glow size={11} style={{ letterSpacing: 3, display: "block", marginBottom: 3 }}>PROTOCOL COVERAGE</Glow>
+                      <span style={{ fontFamily: SANS, fontSize: 13, fontWeight: 600, color: C.text, display: "block", marginBottom: 3 }}>Protocol coverage</span>
                       <span style={{ fontFamily: SANS, fontSize: 12, color: C.mutedHi }}>Scanned {Object.keys(protocolCounts).length > 0 ? Object.keys(protocolCounts).length : "8"} protocols · Mainnet</span>
                     </div>
                     {protocolLoading && (
@@ -1794,7 +1838,7 @@ export default function DeepSenseClientPage() {
           if (guardianLoading) return (
             <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
               <div style={{ display: "flex", alignItems: "center", gap: 10, padding: "6px 0" }}>
-                <span style={{ width: 8, height: 8, borderRadius: "50%", background: C.accent, boxShadow: `0 0 10px ${C.accent}`, display: "inline-block", animation: "dot-breathe 1.4s ease-in-out infinite" }} />
+                <span style={{ width: 8, height: 8, borderRadius: "50%", background: C.accent, display: "inline-block", animation: "dot-breathe 1.4s ease-in-out infinite" }} />
                 <span style={{ fontFamily: MONO, fontSize: 10, color: C.accent, letterSpacing: 2 }}>READING ON-CHAIN STATE…</span>
                 <span style={{ fontFamily: SANS, fontSize: 11, color: C.muted }}>Querying Sui Testnet · RiskGuardian contract</span>
               </div>
@@ -1839,7 +1883,7 @@ export default function DeepSenseClientPage() {
                     display: "flex", alignItems: "center", gap: 6, padding: "4px 12px",
                     border: `1px solid ${C.warn}44`, borderRadius: 3, background: C.warn+"11",
                   }}>
-                    <span style={{ width: 6, height: 6, borderRadius: "50%", background: C.warn, boxShadow: `0 0 8px ${C.warn}`, display: "inline-block" }} />
+                    <span style={{ width: 6, height: 6, borderRadius: "50%", background: C.warn, display: "inline-block" }} />
                     <span style={{ fontFamily: MONO, fontSize: 10, color: C.warn, letterSpacing: 2 }}>TESTNET · RISK GUARDIAN</span>
                   </div>
                   <span style={{ fontFamily: MONO, fontSize: 10, color: C.muted }}>Live on-chain · auto-refresh 10s</span>
@@ -1880,10 +1924,10 @@ export default function DeepSenseClientPage() {
                   <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
                     <span style={{
                       width: 8, height: 8, borderRadius: "50%", background: C.safe,
-                      boxShadow: `0 0 10px ${C.safe}`, display: "inline-block",
+                      display: "inline-block",
                       animation: "dot-breathe 2.4s ease-in-out infinite",
                     }} />
-                    <Glow size={11} style={{ letterSpacing: 3 }}>AI RISK ENGINE</Glow>
+                    <span style={{ fontFamily: SANS, fontSize: 13, fontWeight: 600, color: C.text }}>AI risk engine</span>
                   </div>
                   <span style={{ fontFamily: SANS, fontSize: 11, color: C.mutedHi }}>Autonomous risk monitoring · CoinGecko feed · 30s refresh</span>
                 </div>
@@ -1925,11 +1969,6 @@ export default function DeepSenseClientPage() {
                               riskAssessment.level === "MEDIUM"   ? C.gold   : C.safe
                             ),
                             animation: riskAssessment.level === "CRITICAL" ? "dot-breathe 1.4s ease-in-out infinite" : "none",
-                            textShadow: `0 0 10px ${
-                              riskAssessment.level === "CRITICAL" ? C.danger :
-                              riskAssessment.level === "HIGH"     ? C.warn   :
-                              riskAssessment.level === "MEDIUM"   ? C.gold   : C.safe
-                            }88`,
                           }}>{riskAssessment.level}</div>
                           <div style={{ fontFamily: MONO, fontSize: 9, color: C.muted, letterSpacing: 1 }}>
                             updated {new Date(riskAssessment.timestamp).toLocaleTimeString()}
@@ -1985,7 +2024,7 @@ export default function DeepSenseClientPage() {
               <Card style={{ border: `1px solid ${C.border}` }}>
                 <div style={{ padding: "14px 16px", borderBottom: `1px solid ${C.border}`, display: "flex", justifyContent: "space-between", alignItems: "center" }}>
                   <div>
-                    <Glow size={11} style={{ letterSpacing: 3, display: "block", marginBottom: 3 }}>ORACLE FEEDS</Glow>
+                    <span style={{ fontFamily: SANS, fontSize: 13, fontWeight: 600, color: C.text, display: "block", marginBottom: 3 }}>Oracle feeds</span>
                     <span style={{ fontFamily: SANS, fontSize: 12, color: C.mutedHi }}>Pyth Network · 10s refresh · real-time confidence bands</span>
                   </div>
                   <Tag color={pythLoading ? C.muted : C.safe}>{pythLoading ? "FETCHING" : "LIVE"}</Tag>
@@ -2035,7 +2074,7 @@ export default function DeepSenseClientPage() {
                 <Card style={{ border: `1px solid ${C.gold}33` }}>
                   <div style={{ padding: "14px 16px", borderBottom: `1px solid ${C.border}`, display: "flex", justifyContent: "space-between", alignItems: "center" }}>
                     <div>
-                      <Glow size={11} color={C.gold} style={{ letterSpacing: 3, display: "block", marginBottom: 3 }}>PENDING AGENT ACTIONS</Glow>
+                      <span style={{ fontFamily: SANS, fontSize: 13, fontWeight: 600, color: C.gold, display: "block", marginBottom: 3 }}>Pending agent actions</span>
                       <span style={{ fontFamily: SANS, fontSize: 12, color: C.mutedHi }}>AI recommendations awaiting on-chain sync</span>
                     </div>
                     <button
@@ -2068,7 +2107,7 @@ export default function DeepSenseClientPage() {
                         fontFamily: MONO, fontSize: 11, fontWeight: 700, letterSpacing: 2,
                         padding: "8px 18px", borderRadius: 4, cursor: "pointer",
                         background: C.gold+"22", border: `1px solid ${C.gold}66`,
-                        color: C.gold, textShadow: `0 0 8px ${C.gold}88`,
+                        color: C.gold,
                       }}
                     >PREVIEW INTENT →</button>
                   </div>
@@ -2099,7 +2138,7 @@ export default function DeepSenseClientPage() {
               <div className="ds-metric-grid" style={{ marginBottom: 0 }}>
                 {/* Risk Score */}
                 <Card style={{ padding: "16px 18px" }}>
-                  <div style={{ fontFamily: MONO, fontSize: 9, color: C.muted, letterSpacing: 3, marginBottom: 8 }}>RISK SCORE</div>
+                  <div style={{ fontFamily: SANS, fontSize: 11, color: C.muted, marginBottom: 8 }}>Risk score</div>
                   <div style={{ display: "flex", alignItems: "baseline", gap: 2 }}>
                     <Glow color={riskScoreColor(policyState.risk_score)} size={32} weight={700}>{policyState.risk_score}</Glow>
                     <span style={{ fontFamily: MONO, fontSize: 14, color: C.muted }}>/100</span>
@@ -2108,7 +2147,6 @@ export default function DeepSenseClientPage() {
                     <div style={{
                       height: "100%", width: `${policyState.risk_score}%`,
                       background: riskScoreColor(policyState.risk_score),
-                      boxShadow: `0 0 8px ${riskScoreColor(policyState.risk_score)}`,
                       transition: "width 0.6s ease", borderRadius: 2,
                     }} />
                   </div>
@@ -2119,7 +2157,7 @@ export default function DeepSenseClientPage() {
 
                 {/* Protocol Status */}
                 <Card style={{ padding: "16px 18px", border: `1px solid ${policyState.is_paused ? C.danger+"44" : C.border}`, background: policyState.is_paused ? C.danger+"08" : C.card }}>
-                  <div style={{ fontFamily: MONO, fontSize: 9, color: C.muted, letterSpacing: 3, marginBottom: 8 }}>PROTOCOL STATUS</div>
+                  <div style={{ fontFamily: SANS, fontSize: 11, color: C.muted, marginBottom: 8 }}>Protocol status</div>
                   <Glow color={policyState.is_paused ? C.danger : C.safe} size={22} weight={700}>
                     {policyState.is_paused ? "PAUSED" : "ACTIVE"}
                   </Glow>
@@ -2130,14 +2168,14 @@ export default function DeepSenseClientPage() {
 
                 {/* Max Leverage */}
                 <Card style={{ padding: "16px 18px" }}>
-                  <div style={{ fontFamily: MONO, fontSize: 9, color: C.muted, letterSpacing: 3, marginBottom: 8 }}>MAX LEVERAGE</div>
+                  <div style={{ fontFamily: SANS, fontSize: 11, color: C.muted, marginBottom: 8 }}>Max leverage</div>
                   <Glow color={C.gold} size={28} weight={700}>{(policyState.max_leverage / 100).toFixed(0)}x</Glow>
                   <div style={{ fontFamily: SANS, fontSize: 11, color: C.mutedHi, marginTop: 6 }}>{policyState.max_leverage}bp on-chain</div>
                 </Card>
 
                 {/* Liquidation Threshold */}
                 <Card style={{ padding: "16px 18px" }}>
-                  <div style={{ fontFamily: MONO, fontSize: 9, color: C.muted, letterSpacing: 3, marginBottom: 8 }}>LIQUIDATION THRESHOLD</div>
+                  <div style={{ fontFamily: SANS, fontSize: 11, color: C.muted, marginBottom: 8 }}>Liquidation threshold</div>
                   <Glow color={C.blue} size={28} weight={700}>{(policyState.liquidation_threshold / 100).toFixed(0)}%</Glow>
                   <div style={{ fontFamily: SANS, fontSize: 11, color: C.mutedHi, marginTop: 6 }}>{policyState.liquidation_threshold}bp on-chain</div>
                 </Card>
@@ -2145,24 +2183,24 @@ export default function DeepSenseClientPage() {
 
               {/* Section B — Agent Info */}
               <Card style={{ padding: "14px 18px" }}>
-                <div style={{ fontFamily: MONO, fontSize: 9, color: C.muted, letterSpacing: 3, marginBottom: 12 }}>AI AGENT STATUS</div>
+                <div style={{ fontFamily: SANS, fontSize: 13, fontWeight: 600, color: C.text, marginBottom: 12 }}>AI agent status</div>
                 <div className="ds-metric-grid" style={{ marginBottom: 0, gap: 16 }}>
                   <div>
-                    <div style={{ fontFamily: MONO, fontSize: 9, color: C.muted, letterSpacing: 2, marginBottom: 5 }}>AGENT ADDRESS</div>
+                    <div style={{ fontFamily: SANS, fontSize: 11, color: C.muted, marginBottom: 5 }}>Agent address</div>
                     <span style={{ fontFamily: MONO, fontSize: 11, color: C.accent }}>{fmt.addr(policyState.agent)}</span>
                   </div>
                   <div>
-                    <div style={{ fontFamily: MONO, fontSize: 9, color: C.muted, letterSpacing: 2, marginBottom: 5 }}>AGENT STATUS</div>
+                    <div style={{ fontFamily: SANS, fontSize: 11, color: C.muted, marginBottom: 5 }}>Agent status</div>
                     <Tag color={policyState.agent_active ? C.safe : C.danger}>{policyState.agent_active ? "ACTIVE" : "REVOKED"}</Tag>
                   </div>
                   <div>
-                    <div style={{ fontFamily: MONO, fontSize: 9, color: C.muted, letterSpacing: 2, marginBottom: 5 }}>ACTIONS REMAINING</div>
+                    <div style={{ fontFamily: SANS, fontSize: 11, color: C.muted, marginBottom: 5 }}>Actions remaining</div>
                     <Glow color={policyState.actions_remaining < 10 ? C.warn : C.text} size={14} weight={700}>
                       {policyState.actions_remaining}/{policyState.max_actions}
                     </Glow>
                   </div>
                   <div>
-                    <div style={{ fontFamily: MONO, fontSize: 9, color: C.muted, letterSpacing: 2, marginBottom: 5 }}>TOTAL ACTIONS TAKEN</div>
+                    <div style={{ fontFamily: SANS, fontSize: 11, color: C.muted, marginBottom: 5 }}>Total actions taken</div>
                     <Glow color={C.text} size={14} weight={700}>{policyState.total_actions}</Glow>
                   </div>
                 </div>
@@ -2173,7 +2211,7 @@ export default function DeepSenseClientPage() {
                 <Card>
                   <div style={{ padding: "14px 16px", borderBottom: `1px solid ${C.border}` }}>
                     <SectionHeader
-                      title="ON-CHAIN AUDIT LOG"
+                      title="On-chain audit log"
                       sub="Every AI action is permanently recorded on Sui · Immutable"
                     />
                   </div>
@@ -2196,7 +2234,7 @@ export default function DeepSenseClientPage() {
                         }}>
                           <div style={{
                             width: 3, alignSelf: "stretch", background: dotColor,
-                            borderRadius: 2, flexShrink: 0, boxShadow: `0 0 6px ${dotColor}`,
+                            borderRadius: 2, flexShrink: 0,
                           }} />
                           <div style={{ flex: 1, minWidth: 0 }}>
                             <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 3 }}>
@@ -2219,7 +2257,7 @@ export default function DeepSenseClientPage() {
                 {/* Section D — Admin Controls */}
                 <Card>
                   <div style={{ padding: "14px 16px", borderBottom: `1px solid ${C.border}` }}>
-                    <SectionHeader title="ADMIN CONTROLS" sub="Human override · DAO governance" />
+                    <SectionHeader title="Admin controls" sub="Human override · DAO governance" />
                   </div>
                   <div style={{ padding: 16, display: "flex", flexDirection: "column", gap: 10 }}>
                     <div style={{
@@ -2236,7 +2274,7 @@ export default function DeepSenseClientPage() {
                         padding: "11px 14px", fontFamily: MONO, fontSize: 11, fontWeight: 700,
                         letterSpacing: 2, borderRadius: 4, cursor: "pointer",
                         background: C.safe+"18", border: `1px solid ${C.safe}66`,
-                        color: C.safe, textShadow: `0 0 8px ${C.safe}88`,
+                        color: C.safe,
                       }}>RESUME PROTOCOL</button>
                     )}
 
@@ -2245,7 +2283,6 @@ export default function DeepSenseClientPage() {
                       letterSpacing: 2, borderRadius: 4, cursor: policyState.agent_active ? "pointer" : "not-allowed",
                       background: C.danger+"18", border: `1px solid ${C.danger}66`,
                       color: policyState.agent_active ? C.danger : C.muted,
-                      textShadow: policyState.agent_active ? `0 0 8px ${C.danger}88` : "none",
                       opacity: policyState.agent_active ? 1 : 0.4,
                     }}>REVOKE AGENT</button>
 
@@ -2253,7 +2290,7 @@ export default function DeepSenseClientPage() {
                       padding: "11px 14px", fontFamily: MONO, fontSize: 11, fontWeight: 700,
                       letterSpacing: 2, borderRadius: 4, cursor: "pointer",
                       background: C.gold+"18", border: `1px solid ${C.gold}66`,
-                      color: C.gold, textShadow: `0 0 8px ${C.gold}88`,
+                      color: C.gold,
                     }}>RESET AGENT BUDGET</button>
 
                     <button onClick={() => {
@@ -2266,7 +2303,7 @@ export default function DeepSenseClientPage() {
                       padding: "11px 14px", fontFamily: MONO, fontSize: 11, fontWeight: 700,
                       letterSpacing: 2, borderRadius: 4, cursor: "pointer",
                       background: C.gold+"18", border: `1px solid ${C.gold}66`,
-                      color: C.gold, textShadow: `0 0 8px ${C.gold}88`,
+                      color: C.gold,
                     }}>ADJUST PARAMETERS</button>
 
                     {showParamsForm && (
@@ -2307,7 +2344,7 @@ export default function DeepSenseClientPage() {
                             flex: 1, padding: "9px 0", fontFamily: MONO, fontSize: 11, fontWeight: 700,
                             letterSpacing: 2, borderRadius: 4, cursor: "pointer",
                             background: C.gold+"22", border: `1px solid ${C.gold}66`,
-                            color: C.gold, textShadow: `0 0 8px ${C.gold}88`,
+                            color: C.gold,
                           }}>SUBMIT →</button>
                           <button onClick={() => setShowParamsForm(false)} style={{
                             padding: "9px 16px", fontFamily: MONO, fontSize: 11,
@@ -2362,7 +2399,7 @@ export default function DeepSenseClientPage() {
                 <div style={{ padding: "14px 16px", borderBottom: `1px solid ${C.border}`, display: "flex", justifyContent: "space-between", alignItems: "center" }}>
                   <div>
                     <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 3 }}>
-                      <Glow size={11} style={{ letterSpacing: 3 }}>PROTOCOL POSITIONS</Glow>
+                      <span style={{ fontFamily: SANS, fontSize: 13, fontWeight: 600, color: C.text }}>Protocol positions</span>
                       <span style={{
                         fontFamily: MONO, fontSize: 8, letterSpacing: 2,
                         padding: "2px 7px", borderRadius: 2,
@@ -2424,9 +2461,13 @@ export default function DeepSenseClientPage() {
                             borderBottom: `1px solid ${C.border}`,
                             display: "flex", alignItems: "center", gap: 8,
                           }}>
-                            <div style={{ width: 7, height: 7, borderRadius: "50%", background: protoColor }} />
-                            <span style={{ fontFamily: MONO, fontSize: 10, color: protoColor, letterSpacing: 2 }}>{proto.toUpperCase()}</span>
-                            <Tag color={protoColor}>{items.length}</Tag>
+                            <div style={{ width: 6, height: 6, borderRadius: "50%", background: protoColor }} />
+                            <span style={{ fontFamily: SANS, fontSize: 12, fontWeight: 600, color: C.text }}>{proto}</span>
+                            <span style={{
+                              fontFamily: SANS, fontSize: 11, color: protoColor,
+                              background: protoColor + "14", border: `1px solid ${protoColor}33`,
+                              padding: "1px 8px", borderRadius: 20,
+                            }}>{items.length}</span>
                           </div>
                           {items.map((pos, i) => {
                             const typeColor = TYPE_COLORS[pos.type] ?? C.accent
@@ -2441,21 +2482,23 @@ export default function DeepSenseClientPage() {
                                 borderBottom: i < items.length - 1 ? `1px solid ${C.border}` : "none",
                                 display: "flex", justifyContent: "space-between", alignItems: "center",
                               }}>
-                                <div style={{ display: "flex", gap: 10, alignItems: "center" }}>
-                                  <Tag color={typeColor}>{pos.type}</Tag>
-                                  <span style={{ fontFamily: MONO, fontSize: 12, color: C.text }}>{pos.asset}</span>
-                                  {valueLabel && (
-                                    <span style={{ fontFamily: MONO, fontSize: 9, color: C.mutedHi }}>{valueLabel}</span>
-                                  )}
+                                <div>
+                                  <div style={{ fontFamily: SANS, fontSize: 13, fontWeight: 600, color: C.text, marginBottom: 2 }}>{pos.asset}</div>
+                                  <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                                    <span style={{ fontFamily: SANS, fontSize: 11, color: C.muted }}>{pos.type}</span>
+                                    {valueLabel && (
+                                      <span style={{ fontFamily: MONO, fontSize: 11, color: C.muted }}>· {valueLabel}</span>
+                                    )}
+                                  </div>
                                 </div>
-                                <div style={{ display: "flex", gap: 12, alignItems: "center" }}>
-                                  <span style={{ fontFamily: MONO, fontSize: 9, color: C.muted }}>
+                                <div style={{ display: "flex", gap: 10, alignItems: "center" }}>
+                                  <span style={{ fontFamily: MONO, fontSize: 10, color: C.muted }}>
                                     {pos.objectId.slice(0, 10)}…
                                   </span>
                                   <a
                                     href={`https://suiscan.xyz/${network}/object/${pos.objectId}`}
                                     target="_blank" rel="noopener noreferrer"
-                                    style={{ fontFamily: MONO, fontSize: 9, color: C.blue, textDecoration: "none" }}
+                                    style={{ fontFamily: SANS, fontSize: 12, color: C.blue, textDecoration: "none" }}
                                   >↗</a>
                                 </div>
                               </div>
@@ -2506,7 +2549,7 @@ export default function DeepSenseClientPage() {
                 <DeepBookPanel selectedPool={selectedPool} />
                 {selectedPool && (
                   <Card style={{ padding: 16 }}>
-                    <SectionHeader title="POOL STATISTICS" sub={`${selectedPool.base}/${selectedPool.quote} · DeepBook CLOB · Simulated`} />
+                    <SectionHeader title="Pool statistics" sub={`${selectedPool.base}/${selectedPool.quote} · DeepBook CLOB · Simulated`} />
                     <div style={{ display: "grid", gridTemplateColumns: "repeat(3,1fr)", gap: 10 }}>
                       {[
                         ["24H VOLUME",      "—"],
@@ -2559,7 +2602,7 @@ export default function DeepSenseClientPage() {
               <RiskFeed events={riskEvents} walletConnected={isWalletConnected} />
               {positions.length > 0 && (
                 <Card style={{ padding: 16 }}>
-                  <SectionHeader title="POSITION HEALTH" />
+                  <SectionHeader title="Position health" />
                   {positions.map(p => (
                     <div key={p.id} style={{ marginBottom: 14 }}>
                       <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 6 }}>
@@ -2586,7 +2629,7 @@ export default function DeepSenseClientPage() {
               <PortfolioOverview positions={positions} walletConnected={isWalletConnected} />
               {positions.length > 0 && (
                 <Card style={{ padding: 16 }}>
-                  <SectionHeader title="POSITION HEALTH" />
+                  <SectionHeader title="Position health" />
                   {positions.map(p => (
                     <div key={p.id} style={{ marginBottom: 14 }}>
                       <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 6 }}>
@@ -2609,7 +2652,7 @@ export default function DeepSenseClientPage() {
         {tab === "architecture" && (
           <Card>
             <div style={{ padding: "14px 16px", borderBottom: `1px solid ${C.border}` }}>
-              <SectionHeader title="TECH ARCHITECTURE" sub="Sui + DeepBook integration stack" />
+              <SectionHeader title="Tech architecture" sub="Sui + DeepBook integration stack" />
             </div>
             <div style={{ padding: 16, display: "flex", flexDirection: "column", gap: 10 }}>
               {[

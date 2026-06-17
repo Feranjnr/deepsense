@@ -9,20 +9,20 @@ import type { ProtocolPosition } from "../hooks/useProtocolPositions"
 const MONO = "'IBM Plex Mono','Courier New',monospace"
 const SANS = "'IBM Plex Sans',system-ui,sans-serif"
 const C = {
-  bg:       "#03080f",
-  card:     "#08111c",
-  surface:  "#060d16",
-  border:   "#0e2035",
-  borderHi: "#1a3d5c",
-  accent:   "#0af5d4",
-  blue:     "#0a7fff",
-  gold:     "#f5c842",
-  danger:   "#ff4567",
-  warn:     "#ff9900",
-  safe:     "#00e676",
-  text:     "#d0e8f0",
-  muted:    "#3a5a70",
-  mutedHi:  "#5a7a90",
+  bg:       "#FBFBFA",
+  card:     "#FFFFFF",
+  surface:  "#F4F5F7",
+  border:   "#E4E6EB",
+  borderHi: "#D4D8E0",
+  accent:   "#1A56DB",
+  blue:     "#1A56DB",
+  gold:     "#BA7517",
+  danger:   "#E24B4A",
+  warn:     "#BA7517",
+  safe:     "#1D9E75",
+  text:     "#16181D",
+  muted:    "#5B6470",
+  mutedHi:  "#8A929E",
 }
 
 // ─── Types ────────────────────────────────────────────────────────────────────

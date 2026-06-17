@@ -9,18 +9,18 @@ import type { ProtocolPosition } from "../hooks/useProtocolPositions"
 const MONO = "'IBM Plex Mono','Courier New',monospace"
 const SANS = "'IBM Plex Sans',system-ui,sans-serif"
 const C = {
-  bg:       "#03080f",
-  card:     "#08111c",
-  border:   "#0e2035",
-  borderHi: "#1a3d5c",
-  accent:   "#0af5d4",
-  gold:     "#f5c842",
-  danger:   "#ff4567",
-  warn:     "#ff9900",
-  safe:     "#00e676",
-  text:     "#d0e8f0",
-  muted:    "#3a5a70",
-  mutedHi:  "#5a7a90",
+  bg:       "#FBFBFA",
+  card:     "#FFFFFF",
+  border:   "#E4E6EB",
+  borderHi: "#D4D8E0",
+  accent:   "#1A56DB",
+  gold:     "#BA7517",
+  danger:   "#E24B4A",
+  warn:     "#BA7517",
+  safe:     "#1D9E75",
+  text:     "#16181D",
+  muted:    "#5B6470",
+  mutedHi:  "#8A929E",
 }
 
 // ─── Public types ─────────────────────────────────────────────────────────────
@@ -47,7 +47,11 @@ export type ActionIntent = {
 }
 
 // ─── Guardian risk-class computation ─────────────────────────────────────────
-// These are computed from REAL Navi mainnet positions, not placeholders.
+// Data source: protocolPositions from useProtocolPositions (Navi SDK + object scanner).
+// Navi SDK positions carry healthFactor (account-level, from getHealthFactor RPC call)
+// and usdValue (per position, from Navi's on-chain oracle via getCoinOracleInfo).
+// Object-scanner positions (Scallop, Cetus, etc.) have healthFactor=undefined and
+// usdValue=undefined — they are excluded from both risk calculations below.
 
 type RiskLevel = "LOW" | "MEDIUM" | "HIGH" | "CRITICAL"
 
@@ -59,6 +63,9 @@ type GuardianWarning = {
   body: string
 }
 
+// Reads: ProtocolPosition.healthFactor (number | undefined).
+// Set by fetchNaviPositions via account.getHealthFactor(address).
+// undefined when: no wallet, RPC error, or no Navi positions at all.
 function computeLiquidationRisk(positions: ProtocolPosition[]): GuardianWarning {
   const naviPos  = positions.filter(p => p.protocol === "Navi Protocol")
   const borrows  = naviPos.filter(p => p.type === "BORROW")
@@ -128,6 +135,10 @@ function computeLiquidationRisk(positions: ProtocolPosition[]): GuardianWarning 
   }
 }
 
+// Reads: ProtocolPosition.usdValue (number | undefined) for Navi LEND positions only.
+// Set by fetchNaviPositions via getCoinOracleInfo (Navi on-chain oracle).
+// Positions with usdValue=0 or undefined are excluded — other protocols have no oracle data
+// and must not silently inflate or skew the concentration metric.
 function computeConcentrationRisk(positions: ProtocolPosition[]): GuardianWarning {
   const supplies = positions.filter(
     p => p.protocol === "Navi Protocol" && p.type === "LEND" && (p.usdValue ?? 0) > 0,
@@ -139,7 +150,7 @@ function computeConcentrationRisk(positions: ProtocolPosition[]): GuardianWarnin
       level: "LOW",
       metric: "—",
       headline: "No supply positions detected",
-      body: "No active collateral on Navi Protocol mainnet. No single-asset concentration risk at this time.",
+      body: "No active supply positions across Navi positions. No single-asset concentration risk at this time.",
     }
   }
 
@@ -161,16 +172,16 @@ function computeConcentrationRisk(positions: ProtocolPosition[]): GuardianWarnin
     riskClass: "CONCENTRATION RISK",
     level: "HIGH",
     metric,
-    headline: `${pct}% of collateral in ${topAsset} — high concentration`,
-    body: `A sharp ${topAsset} price decline would severely reduce your collateral value. Consider diversifying into stablecoins or other assets.`,
+    headline: `${pct}% across Navi positions in ${topAsset} — high concentration`,
+    body: `A sharp ${topAsset} price decline would severely reduce your value across Navi positions. Consider diversifying into stablecoins or other assets.`,
   }
 
   if (pct >= 60) return {
     riskClass: "CONCENTRATION RISK",
     level: "MEDIUM",
     metric,
-    headline: `${pct}% of collateral in ${topAsset}`,
-    body: `Moderate concentration in ${topAsset}. Collateral spans ${assetCount} asset${assetCount > 1 ? "s" : ""} but ${topAsset} dominates. Consider partial diversification.`,
+    headline: `${pct}% across Navi positions in ${topAsset}`,
+    body: `Moderate concentration in ${topAsset} across Navi positions — ${assetCount} asset${assetCount > 1 ? "s" : ""} total but ${topAsset} dominates. Consider partial diversification.`,
   }
 
   return {
@@ -178,7 +189,7 @@ function computeConcentrationRisk(positions: ProtocolPosition[]): GuardianWarnin
     level: "LOW",
     metric,
     headline: `Diversified: largest position ${pct}% ${topAsset}`,
-    body: `Collateral is spread across ${assetCount} asset${assetCount > 1 ? "s" : ""}. No single-asset dominance detected.`,
+    body: `Supply is spread across ${assetCount} asset${assetCount > 1 ? "s" : ""} across Navi positions. No single-asset dominance detected.`,
   }
 }
 
@@ -210,8 +221,8 @@ function WarningCard({ w }: { w: GuardianWarning }) {
       padding: "14px 16px",
       minWidth: 0,
     }}>
-      <div style={{ fontFamily: MONO, fontSize: 8, color: C.mutedHi, letterSpacing: 3, marginBottom: 8 }}>
-        {w.riskClass}
+      <div style={{ fontFamily: SANS, fontSize: 11, color: C.muted, marginBottom: 8 }}>
+        {w.riskClass.charAt(0) + w.riskClass.slice(1).toLowerCase()}
       </div>
       <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 4 }}>
         <span style={{ fontFamily: MONO, fontSize: 16, color, lineHeight: 1 }}>{LEVEL_ICON[w.level]}</span>
@@ -235,7 +246,7 @@ function WarningCard({ w }: { w: GuardianWarning }) {
 function Row({ label, value, valueColor }: { label: string; value: React.ReactNode; valueColor?: string }) {
   return (
     <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", padding: "7px 0", borderBottom: `1px solid ${C.border}` }}>
-      <span style={{ fontFamily: MONO, fontSize: 9, color: C.muted, letterSpacing: 2 }}>{label}</span>
+      <span style={{ fontFamily: SANS, fontSize: 12, color: C.muted }}>{label}</span>
       <span style={{ fontFamily: SANS, fontSize: 13, color: valueColor ?? C.text, fontWeight: 500 }}>{value}</span>
     </div>
   )
@@ -278,6 +289,7 @@ export function ActionPreview({
     : concWarning.level
 
   function handleConfirm() {
+    if (phase === "signing") return  // double-click guard: one tx in flight at a time
     let tx: Transaction
     try {
       tx = intent.buildTx()
@@ -334,8 +346,8 @@ export function ActionPreview({
         textAlign: "center",
       }}>
         <div style={{ fontFamily: MONO, fontSize: 26, color: C.safe, marginBottom: 10 }}>✓</div>
-        <div style={{ fontFamily: MONO, fontSize: 11, color: C.safe, letterSpacing: 2, marginBottom: 6 }}>
-          CONFIRMED ON-CHAIN
+        <div style={{ fontFamily: SANS, fontSize: 14, fontWeight: 600, color: C.safe, marginBottom: 6 }}>
+          Confirmed on-chain
         </div>
         <div style={{ fontFamily: SANS, fontSize: 13, color: C.text, marginBottom: 18 }}>
           {intent.action} submitted to Sui Testnet
@@ -364,12 +376,12 @@ export function ActionPreview({
           <button
             onClick={onCancel}
             style={{
-              background: "none", border: `1px solid ${C.border}`,
-              borderRadius: 4, padding: "7px 18px",
-              fontFamily: MONO, fontSize: 10, color: C.muted,
-              letterSpacing: 1, cursor: "pointer",
+              background: C.card, border: `1px solid ${C.border}`,
+              borderRadius: 6, padding: "7px 20px",
+              fontFamily: SANS, fontSize: 13, fontWeight: 500, color: C.text,
+              cursor: "pointer",
             }}
-          >CLOSE</button>
+          >Close</button>
         </div>
       </div>
     )
@@ -385,54 +397,55 @@ export function ActionPreview({
 
       {/* ── Header ────────────────────────────────────────────────────── */}
       <div style={{
-        padding: "12px 18px",
+        padding: "14px 18px",
         borderBottom: `1px solid ${C.border}`,
-        background: C.bg,
+        background: C.card,
         display: "flex", justifyContent: "space-between", alignItems: "center",
       }}>
-        <span style={{ fontFamily: MONO, fontSize: 9, color: C.accent, letterSpacing: 3 }}>
-          ACTION PREVIEW
+        <span style={{ fontFamily: SANS, fontSize: 14, fontWeight: 600, color: C.text }}>
+          Action preview
         </span>
         <span style={{
-          fontFamily: MONO, fontSize: 9, letterSpacing: 2,
-          padding: "2px 9px", borderRadius: 2,
-          border: `1px solid ${phase === "error" ? C.danger + "55" : C.accent + "44"}`,
-          color: phase === "error" ? C.danger : C.accent,
+          fontFamily: SANS, fontSize: 12,
+          padding: "3px 10px", borderRadius: 20,
+          border: `1px solid ${phase === "error" ? C.danger + "55" : C.border}`,
+          color: phase === "error" ? C.danger : C.muted,
+          background: phase === "error" ? C.danger + "0d" : C.bg,
         }}>
-          {phase === "signing" ? "AWAITING WALLET" : phase === "error" ? "ERROR" : "PREVIEW"}
+          {phase === "signing" ? "Awaiting wallet…" : phase === "error" ? "Error" : "Preview"}
         </span>
       </div>
 
       {/* ── Plain-English summary ─────────────────────────────────────── */}
       <div style={{ padding: "16px 18px", borderBottom: `1px solid ${C.border}` }}>
-        <Row label="PROTOCOL"       value={intent.protocol} />
-        <Row label="ACTION"         value={intent.action} valueColor={C.accent} />
+        <Row label="Protocol"            value={intent.protocol} />
+        <Row label="Action"              value={intent.action} valueColor={C.accent} />
         {(intent.amount > 0 || intent.asset) && (
-          <Row label="VALUE"
+          <Row label="Value"
             value={intent.amount > 0 ? `${intent.amount} ${intent.asset}`.trim() : intent.asset || "—"}
           />
         )}
         <Row
-          label="EFFECT ON SCORE"
+          label="Effect on risk score"
           value={effectLabel}
           valueColor={effectColor}
         />
-        <Row label="GAS ESTIMATE"   value={intent.gasEstimate} valueColor={C.mutedHi} />
+        <Row label="Est. gas"            value={intent.gasEstimate} valueColor={C.mutedHi} />
       </div>
 
       {/* ── Guardian section ──────────────────────────────────────────── */}
       <div style={{ padding: "14px 18px", borderBottom: `1px solid ${C.border}` }}>
         <div style={{
-          fontFamily: MONO, fontSize: 8, color: C.mutedHi, letterSpacing: 3, marginBottom: 12,
+          fontFamily: SANS, fontSize: 12, color: C.muted, marginBottom: 12,
           display: "flex", justifyContent: "space-between", alignItems: "center",
         }}>
-          <span>GUARDIAN RISK ASSESSMENT · LIVE MAINNET POSITIONS</span>
+          <span>Guardian risk assessment · live mainnet positions</span>
           <span style={{
-            padding: "1px 8px", borderRadius: 2, fontSize: 8, letterSpacing: 2,
+            fontFamily: SANS, fontSize: 11, padding: "2px 10px", borderRadius: 20,
             border: `1px solid ${LEVEL_COLOR[worstLevel]}44`,
             color: LEVEL_COLOR[worstLevel],
             background: LEVEL_COLOR[worstLevel] + "0d",
-          }}>{worstLevel}</span>
+          }}>{worstLevel.charAt(0) + worstLevel.slice(1).toLowerCase()}</span>
         </div>
         <div style={{ display: "flex", gap: 10 }}>
           <WarningCard w={liqWarning}  />
@@ -465,21 +478,21 @@ export function ActionPreview({
           onClick={onCancel}
           disabled={phase === "signing"}
           style={{
-            background: "none",
+            background: C.card,
             border: `1px solid ${C.border}`,
-            borderRadius: 4, padding: "9px 18px",
-            fontFamily: MONO, fontSize: 10, color: C.muted,
-            letterSpacing: 1, cursor: phase === "signing" ? "not-allowed" : "pointer",
+            borderRadius: 6, padding: "9px 20px",
+            fontFamily: SANS, fontSize: 13, fontWeight: 500, color: C.text,
+            cursor: phase === "signing" ? "not-allowed" : "pointer",
           }}
-        >CANCEL</button>
+        >Cancel</button>
 
         {/* Risk disclaimer */}
         {worstLevel === "HIGH" || worstLevel === "CRITICAL" ? (
-          <span style={{ fontFamily: SANS, fontSize: 10, color: C.danger, flex: 1, textAlign: "center" }}>
+          <span style={{ fontFamily: SANS, fontSize: 11, color: C.danger, flex: 1, textAlign: "center" }}>
             ⚠ High risk detected — review warnings above
           </span>
         ) : (
-          <span style={{ fontFamily: SANS, fontSize: 10, color: C.muted, flex: 1, textAlign: "center" }}>
+          <span style={{ fontFamily: SANS, fontSize: 11, color: C.muted, flex: 1, textAlign: "center" }}>
             Nothing signs until you click Confirm
           </span>
         )}
@@ -488,18 +501,16 @@ export function ActionPreview({
           onClick={handleConfirm}
           disabled={phase === "signing"}
           style={{
-            background: phase === "signing" ? "none" : C.gold + "18",
-            border: `1px solid ${C.gold}${phase === "signing" ? "33" : "77"}`,
-            borderRadius: 4, padding: "9px 22px",
-            fontFamily: MONO, fontSize: 11, fontWeight: 700,
-            color: phase === "signing" ? C.muted : C.gold,
-            letterSpacing: 1,
+            background: phase === "signing" ? C.border : C.accent,
+            border: `1px solid ${phase === "signing" ? C.border : C.accent}`,
+            borderRadius: 6, padding: "9px 22px",
+            fontFamily: SANS, fontSize: 13, fontWeight: 600,
+            color: phase === "signing" ? C.muted : "#fff",
             cursor: phase === "signing" ? "not-allowed" : "pointer",
-            textShadow: phase === "signing" ? "none" : `0 0 8px ${C.gold}88`,
             transition: "all 0.2s",
           }}
         >
-          {phase === "signing" ? "AWAITING WALLET…" : phase === "error" ? "RETRY →" : "CONFIRM TX →"}
+          {phase === "signing" ? "Signing…" : phase === "error" ? "Retry" : "Confirm"}
         </button>
       </div>
     </div>

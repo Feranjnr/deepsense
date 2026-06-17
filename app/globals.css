@@ -4,20 +4,20 @@
 * { box-sizing: border-box; margin: 0; padding: 0; }
 
 :root {
-  --bg:        #03080f;
-  --surface:   #060d16;
-  --card:      #08111c;
-  --border:    #0e2035;
-  --border-hi: #1a3d5c;
-  --accent:    #0af5d4;
-  --blue:      #0a7fff;
-  --gold:      #f5c842;
-  --danger:    #ff4567;
-  --warn:      #ff9900;
-  --safe:      #00e676;
-  --text:      #d0e8f0;
-  --muted:     #3a5a70;
-  --muted-hi:  #5a7a90;
+  --bg:        #FBFBFA;
+  --surface:   #F4F5F7;
+  --card:      #FFFFFF;
+  --border:    #E4E6EB;
+  --border-hi: #D4D8E0;
+  --accent:    #1A56DB;
+  --blue:      #1A56DB;
+  --gold:      #BA7517;
+  --danger:    #E24B4A;
+  --warn:      #BA7517;
+  --safe:      #1D9E75;
+  --text:      #16181D;
+  --muted:     #5B6470;
+  --muted-hi:  #8A929E;
   --mono: 'IBM Plex Mono','Courier New',monospace;
   --sans: 'IBM Plex Sans',system-ui,sans-serif;
 }
@@ -30,7 +30,7 @@ html, body {
 }
 
 ::-webkit-scrollbar { width: 4px; height: 4px; }
-::-webkit-scrollbar-track { background: var(--bg); }
+::-webkit-scrollbar-track { background: var(--surface); }
 ::-webkit-scrollbar-thumb { background: var(--border-hi); border-radius: 2px; }
 
 input[type=range] {
@@ -48,22 +48,22 @@ input[type=range]::-webkit-slider-thumb {
 
 /* ─── Motion polish ─────────────────────────────────────────────────────────── */
 
-/* Viewport-edge red glow when risk is CRITICAL */
+/* Subtle tint on viewport edge when risk is CRITICAL */
 @keyframes critical-pulse {
-  0%, 100% { box-shadow: inset 0 0 100px rgba(255, 69, 103, 0.09); }
-  50%       { box-shadow: inset 0 0 100px rgba(255, 69, 103, 0.20); }
+  0%, 100% { box-shadow: inset 0 0 80px rgba(226, 75, 74, 0.04); }
+  50%       { box-shadow: inset 0 0 80px rgba(226, 75, 74, 0.10); }
 }
 
-/* Gentle scale breathe for the risk gauge in CRITICAL state */
+/* Gentle opacity breathe for the risk gauge in CRITICAL state */
 @keyframes gauge-pulse {
-  0%, 100% { transform: scale(1);     }
-  50%       { transform: scale(1.022); }
+  0%, 100% { opacity: 1;    }
+  50%       { opacity: 0.82; }
 }
 
 /* Soft breathe for live-status indicator dots */
 @keyframes dot-breathe {
   0%, 100% { opacity: 1;    transform: scale(1);    }
-  50%       { opacity: 0.45; transform: scale(0.78); }
+  50%       { opacity: 0.5; transform: scale(0.80); }
 }
 
 /* Tab content fade-in on switch */
@@ -88,7 +88,7 @@ input[type=range]::-webkit-slider-thumb {
   100% { background-position:  600px 0; }
 }
 .ds-skeleton {
-  background: linear-gradient(90deg, #0e2035 25%, #1a3d5c 50%, #0e2035 75%);
+  background: linear-gradient(90deg, #E4E6EB 25%, #D4D8E0 50%, #E4E6EB 75%);
   background-size: 1200px 100%;
   animation: shimmer 1.6s ease-in-out infinite;
   border-radius: 3px;
