@@ -1437,11 +1437,15 @@ export default function DeepSenseClientPage() {
         background: C.card, display: "flex", alignItems: "center",
         padding: "0 24px", gap: 0, minWidth: 0, height: 56,
       }}>
-        {/* Logo */}
-        <div style={{
+        {/* Logo — click to return to landing */}
+        <div onClick={() => setLaunched(false)} style={{
           display: "flex", alignItems: "center", gap: 8, flexShrink: 0,
           paddingRight: 20, marginRight: 12, borderRight: `1px solid ${C.border}`,
-        }}>
+          cursor: "pointer", opacity: 1, transition: "opacity 0.15s",
+        }}
+          onMouseEnter={e => (e.currentTarget.style.opacity = "0.72")}
+          onMouseLeave={e => (e.currentTarget.style.opacity = "1")}
+        >
           <div style={{
             width: 28, height: 28, borderRadius: 5, background: C.blue,
             display: "flex", alignItems: "center", justifyContent: "center",
