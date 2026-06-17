@@ -2,7 +2,7 @@
 
 import { useState, useEffect, useRef } from "react"
 import { SuiClientProvider, WalletProvider, ConnectButton as DappConnectButton } from "@mysten/dapp-kit"
-import { useCurrentAccount, useSuiClient, useSignAndExecuteTransaction } from "@mysten/dapp-kit"
+import { useCurrentAccount, useSuiClient, useSignAndExecuteTransaction, useDisconnectWallet } from "@mysten/dapp-kit"
 import { Transaction } from "@mysten/sui/transactions"
 import { useRiskGuardian } from "@/app/hooks/useRiskGuardian"
 import { useRiskEngine } from "@/app/hooks/useRiskEngine"
@@ -1282,7 +1282,23 @@ export default function DeepSenseClientPage() {
     demoMode,
   })
   const { mutate: signAndExecute } = useSignAndExecuteTransaction()
+  const { mutate: disconnect } = useDisconnectWallet()
+  const [walletMenuOpen, setWalletMenuOpen] = useState(false)
+  const walletMenuRef = useRef<HTMLDivElement>(null)
+  const [copied, setCopied] = useState(false)
   const [txStatus, setTxStatus] = useState<string>("")
+
+  // Close wallet dropdown on outside click
+  useEffect(() => {
+    if (!walletMenuOpen) return
+    function handleClick(e: MouseEvent) {
+      if (walletMenuRef.current && !walletMenuRef.current.contains(e.target as Node)) {
+        setWalletMenuOpen(false)
+      }
+    }
+    document.addEventListener("mousedown", handleClick)
+    return () => document.removeEventListener("mousedown", handleClick)
+  }, [walletMenuOpen])
 
   // ── Pipeline effects (declared after riskAssessment / actionLog are in scope) ──
   // Trigger pipeline when score crosses into HIGH/CRITICAL, reset when it drops to LOW
@@ -1478,13 +1494,62 @@ export default function DeepSenseClientPage() {
         <div style={{ display: "flex", alignItems: "center", gap: 10, flexShrink: 0 }}>
           <NetBadge phase={network} />
           {isWalletConnected ? (
-            <div style={{
-              display: "inline-flex", alignItems: "center", gap: 6,
-              background: C.card, border: `1px solid ${C.border}`,
-              borderRadius: 20, padding: "5px 12px",
-            }}>
-              <div style={{ width: 6, height: 6, borderRadius: "50%", background: C.safe, flexShrink: 0 }} />
-              <span style={{ fontFamily: MONO, fontSize: 11, color: C.text }}>{fmt.addr(walletAddr ?? undefined)}</span>
+            <div ref={walletMenuRef} style={{ position: "relative" }}>
+              <button onClick={() => setWalletMenuOpen(o => !o)} style={{
+                display: "inline-flex", alignItems: "center", gap: 6,
+                background: C.card, border: `1px solid ${walletMenuOpen ? C.borderHi : C.border}`,
+                borderRadius: 20, padding: "5px 12px",
+                cursor: "pointer", transition: "border-color 0.15s",
+              }}>
+                <div style={{ width: 6, height: 6, borderRadius: "50%", background: C.safe, flexShrink: 0 }} />
+                <span style={{ fontFamily: MONO, fontSize: 11, color: C.text }}>{fmt.addr(walletAddr ?? undefined)}</span>
+                <span style={{ fontFamily: SANS, fontSize: 10, color: C.muted, marginLeft: 2 }}>▾</span>
+              </button>
+              {walletMenuOpen && (
+                <div style={{
+                  position: "absolute", top: "calc(100% + 8px)", right: 0,
+                  background: C.card, border: `1px solid ${C.border}`,
+                  borderRadius: 8, minWidth: 220,
+                  boxShadow: "0 4px 16px rgba(16,24,40,0.10)",
+                  zIndex: 1000, overflow: "hidden",
+                }}>
+                  {/* Address row */}
+                  <div style={{ padding: "12px 14px", borderBottom: `1px solid ${C.border}` }}>
+                    <div style={{ fontFamily: SANS, fontSize: 11, color: C.muted, marginBottom: 4 }}>Connected wallet</div>
+                    <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8 }}>
+                      <span style={{ fontFamily: MONO, fontSize: 11, color: C.text, wordBreak: "break-all" }}>
+                        {walletAddr ? `${walletAddr.slice(0, 10)}…${walletAddr.slice(-8)}` : "—"}
+                      </span>
+                      <button onClick={() => {
+                        if (walletAddr) {
+                          navigator.clipboard.writeText(walletAddr)
+                          setCopied(true)
+                          setTimeout(() => setCopied(false), 1500)
+                        }
+                      }} style={{
+                        fontFamily: SANS, fontSize: 11, padding: "3px 8px", flexShrink: 0,
+                        background: copied ? C.safe + "18" : C.surface,
+                        border: `1px solid ${copied ? C.safe + "44" : C.border}`,
+                        color: copied ? C.safe : C.muted,
+                        borderRadius: 4, cursor: "pointer", transition: "all 0.15s",
+                      }}>{copied ? "Copied" : "Copy"}</button>
+                    </div>
+                  </div>
+                  {/* Disconnect */}
+                  <button onClick={() => { disconnect(); setWalletMenuOpen(false) }} style={{
+                    width: "100%", padding: "11px 14px", textAlign: "left",
+                    fontFamily: SANS, fontSize: 13, fontWeight: 500,
+                    color: C.danger, background: "transparent", border: "none",
+                    cursor: "pointer", display: "flex", alignItems: "center", gap: 8,
+                    transition: "background 0.12s",
+                  }}
+                    onMouseEnter={e => (e.currentTarget.style.background = C.danger + "0a")}
+                    onMouseLeave={e => (e.currentTarget.style.background = "transparent")}
+                  >
+                    <span style={{ fontSize: 14 }}>⏻</span> Disconnect
+                  </button>
+                </div>
+              )}
             </div>
           ) : (
             <DappConnectButton
