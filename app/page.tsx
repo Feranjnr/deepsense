@@ -329,9 +329,16 @@ function PortfolioOverview({ positions, walletConnected }: any) {
   const borrowed  = hasPositions ? positions.filter((p: any) => p.type === "BORROW").reduce((s: number, p: any) => s + (p.size || 0), 0) : 0
   const netValue  = supplied - borrowed
   const totalPnl  = hasPositions ? positions.reduce((s: number, p: any) => s + p.pnl, 0) : 0
-  const healthPos = hasPositions ? positions.filter((p: any) => p.health < 100) : []
-  const avgHealth = healthPos.length > 0 ? Math.round(healthPos.reduce((s: number, p: any) => s + p.health, 0) / healthPos.length) : (hasPositions ? 100 : 0)
-  const atRisk    = hasPositions ? positions.filter((p: any) => p.health < 60).length : 0
+  // PnL is only meaningful when at least one position has a real entry price.
+  // The adapter hardcodes pnl:0 for all positions (no entry-price data available
+  // from Navi/fallback scan), so totalPnl===0 with every p.pnl===0 means "no data".
+  const hasPnlData = hasPositions && positions.some((p: any) => p.pnl !== 0)
+  // healthPos = positions that have REAL health data (not null).
+  // Previously filtered for health < 100, which excluded genuinely healthy accounts
+  // (HF ≥ 2.0 maps to 100%) and caused "No health data yet" even when data was present.
+  const healthPos = hasPositions ? positions.filter((p: any) => p.health !== null) : []
+  const avgHealth = healthPos.length > 0 ? Math.round(healthPos.reduce((s: number, p: any) => s + p.health, 0) / healthPos.length) : 0
+  const atRisk    = hasPositions ? positions.filter((p: any) => p.health !== null && p.health < 60).length : 0
   const stats = [
     {
       label: "Net DeFi value",
@@ -343,15 +350,17 @@ function PortfolioOverview({ positions, walletConnected }: any) {
     },
     {
       label: "Total PnL",
-      value: hasPositions ? fmt.usd(Math.abs(totalPnl)) : "$0.00",
-      color: hasPositions ? (totalPnl >= 0 ? C.safe : C.danger) : C.muted,
-      sub: hasPositions ? (totalPnl >= 0 ? "▲ Profitable" : "▼ In loss") : "—",
+      value: hasPnlData ? fmt.usd(Math.abs(totalPnl)) : "—",
+      color: hasPnlData ? (totalPnl >= 0 ? C.safe : C.danger) : C.muted,
+      sub: hasPnlData ? (totalPnl >= 0 ? "▲ Profitable" : "▼ In loss") : "Entry price data unavailable",
     },
     {
       label: "Avg health",
       value: healthPos.length > 0 ? `${avgHealth}%` : "—",
       color: healthPos.length > 0 ? healthColor(avgHealth) : C.muted,
-      sub: healthPos.length > 0 ? `Across ${healthPos.length} Navi position${healthPos.length !== 1 ? "s" : ""}` : hasPositions ? "No health data yet" : "—",
+      sub: healthPos.length > 0
+        ? `Navi account · ${healthPos.length} position${healthPos.length !== 1 ? "s" : ""}`
+        : hasPositions ? "Health factor unavailable" : "—",
     },
     {
       label: "At risk",
@@ -377,8 +386,11 @@ function PortfolioOverview({ positions, walletConnected }: any) {
 
 // ─── POSITION TABLE ────────────────────────────────────────────────────────────
 function PositionTable({ positions, onSelect, selected, walletConnected }: any) {
-  function healthStatus(health: number, protocol: string): { label: string; color: string } | null {
-    if (health === 100 && protocol !== "Navi Protocol") return null
+  function healthStatus(health: number | null, type: string): { label: string; color: string } | null {
+    if (health === null) return null
+    // Navi's HF is account-level. Show it only on BORROW rows — those are what
+    // get liquidated. LEND/LP/STAKE positions have no independent per-row HF.
+    if (type !== "BORROW") return null
     if (health >= 80) return { label: `Healthy · ${health}%`, color: C.safe }
     if (health >= 50) return { label: `Monitor · ${health}%`, color: C.warn }
     return { label: `At risk · ${health}%`, color: C.danger }
@@ -417,7 +429,7 @@ function PositionTable({ positions, onSelect, selected, walletConnected }: any) 
             </thead>
             <tbody>
               {positions.map((p: any) => {
-                const status = healthStatus(p.health, p.protocol)
+                const status = healthStatus(p.health, p.type)
                 return (
                   <tr key={p.id} onClick={() => onSelect(p)}
                     style={{
@@ -608,7 +620,7 @@ function ScenarioSimulator({ positions }: any) {
 
 A trader has these open positions:
 ${positions.map((p: any) =>
-  `- ${p.type} ${p.asset} on ${p.protocol}: Size $${p.size}, Leverage ${p.leverage}x, Health ${p.health}%, Liquidation at $${p.liquidationPrice ?? "N/A"}, Current PNL: $${p.pnl}`
+  `- ${p.type} ${p.asset} on ${p.protocol}: Size $${p.size}, Leverage ${p.leverage}x${p.health !== null ? `, Health ${p.health}%` : ""}, Liquidation at $${p.liquidationPrice ?? "N/A"}, Current PNL: $${p.pnl}`
 ).join("\n")}
 
 Scenario: The market drops ${drop}% across all assets in the next hour.
@@ -883,7 +895,7 @@ On-chain risk score: ${ps.risk_score}/100 | Actions taken: ${ps.total_actions} |
 ## USER COIN BALANCES (Sui Mainnet)
 ${hasPositions
   ? positions.map((p: any) =>
-      `- ${p.asset}: $${p.size.toFixed(2)} value${p.leverage > 1 ? `, ${p.leverage}x leverage` : ""}, Health ${p.health}%${p.liquidationPrice ? `, Liquidation $${p.liquidationPrice}` : ""}, PnL $${p.pnl.toFixed(2)} (${p.pnlPct.toFixed(1)}%)`
+      `- ${p.asset}: $${p.size.toFixed(2)} value${p.leverage > 1 ? `, ${p.leverage}x leverage` : ""}${p.health !== null ? `, Health ${p.health}%` : ""}${p.liquidationPrice ? `, Liquidation $${p.liquidationPrice}` : ""}, PnL $${p.pnl.toFixed(2)} (${p.pnlPct.toFixed(1)}%)`
     ).join("\n")
   : "No wallet connected — provide general Sui DeFi advice."
 }
@@ -1180,7 +1192,7 @@ function generateRiskEvents(positions: any[]): any[] {
   const events: any[] = []
 
   for (const p of positions) {
-    if (p.health < 60) {
+    if (p.health !== null && p.health < 60) {
       events.push({ time: timeStr, event: "Liquidation Warning", position: `${p.asset} ${p.type}`, severity: "HIGH", detail: `Health at ${p.health}% — approaching liquidation` })
     }
   }
@@ -1231,6 +1243,9 @@ export default function DeepSenseClientPage() {
   // usdValue and healthPct are populated by the Navi SDK fetcher; other protocols default
   // to neutral values — no fabricated numbers.
   const positions = protocolPositions.map((p, i) => {
+    // healthPct is the Navi ACCOUNT-LEVEL health factor converted to 0-100.
+    // null means no health data — do NOT default to 100 (that masks fetch failures
+    // and makes every position look healthy when data is unavailable).
     const healthPct = p.details.healthPct != null ? parseInt(p.details.healthPct, 10) : null
     return {
       id:               p.objectId || `pp-${i}`,
@@ -1242,7 +1257,7 @@ export default function DeepSenseClientPage() {
       leverage:         1,
       entryPrice:       null,
       liquidationPrice: null,
-      health:           healthPct ?? 100,
+      health:           healthPct,   // null = unknown; never default to 100
       pnl:              0,
       pnlPct:           0,
       pool:             "",
@@ -2678,10 +2693,12 @@ export default function DeepSenseClientPage() {
                         <span style={{ fontFamily: SANS, fontSize: 12, color: C.text }}>{p.asset}</span>
                         <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
                           <Tag color={p.type === "SHORT" ? C.danger : p.type === "LONG" ? C.safe : p.type === "LP" ? C.gold : C.blue}>{p.type}</Tag>
-                          <Glow color={healthColor(p.health)} size={12}>{p.health}%</Glow>
+                          {p.health !== null
+                            ? <Glow color={healthColor(p.health)} size={12}>{p.health}%</Glow>
+                            : <span style={{ fontFamily: SANS, fontSize: 11, color: C.muted }}>—</span>}
                         </div>
                       </div>
-                      <HealthBar value={p.health} />
+                      {p.health !== null && <HealthBar value={p.health} />}
                     </div>
                   ))}
                 </Card>
@@ -2705,10 +2722,12 @@ export default function DeepSenseClientPage() {
                         <span style={{ fontFamily: SANS, fontSize: 12, color: C.text }}>{p.asset}</span>
                         <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
                           <Tag color={p.type === "SHORT" ? C.danger : p.type === "LONG" ? C.safe : p.type === "LP" ? C.gold : C.blue}>{p.type}</Tag>
-                          <Glow color={healthColor(p.health)} size={12}>{p.health}%</Glow>
+                          {p.health !== null
+                            ? <Glow color={healthColor(p.health)} size={12}>{p.health}%</Glow>
+                            : <span style={{ fontFamily: SANS, fontSize: 11, color: C.muted }}>—</span>}
                         </div>
                       </div>
-                      <HealthBar value={p.health} />
+                      {p.health !== null && <HealthBar value={p.health} />}
                     </div>
                   ))}
                 </Card>

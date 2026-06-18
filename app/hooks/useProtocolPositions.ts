@@ -92,6 +92,28 @@ function extractAllGenerics(rawType: string): string[] {
   return parts.map(coinTypeToSymbol);
 }
 
+// ─── Retry helper ─────────────────────────────────────────────────────────────
+// Retries an async operation up to `attempts` times with increasing delays.
+
+async function withRetry<T>(
+  fn: () => Promise<T>,
+  attempts = 3,
+  delays = [300, 700],
+): Promise<T> {
+  let lastErr: unknown;
+  for (let i = 0; i < attempts; i++) {
+    try {
+      return await fn();
+    } catch (e) {
+      lastErr = e;
+      if (i < attempts - 1) {
+        await new Promise(r => setTimeout(r, delays[i] ?? 700));
+      }
+    }
+  }
+  throw lastErr;
+}
+
 // ─── Navi Protocol SDK fetcher ────────────────────────────────────────────────
 // Navi stores all supply/borrow positions in a shared Storage object keyed by
 // address. getOwnedObjects never returns these — the SDK is required.
@@ -144,6 +166,12 @@ async function fetchNaviPositions(
     let rawHealth: number | null = null;
     try {
       rawHealth = await account.getHealthFactor(address) as number;
+      // Log raw value so we can verify what Navi returns for this account.
+      // Navi returns Infinity when there are no borrows (infinite health).
+      // A finite value (e.g. 1.73) means total collateral / total borrow ÷ liq-threshold.
+      console.log("[useProtocolPositions] Navi rawHealth:", rawHealth,
+        "finite:", isFinite(rawHealth ?? NaN),
+        "hasBorrows:", rawHealth !== null && isFinite(rawHealth));
     } catch (err) {
       console.error("[useProtocolPositions] Navi getHealthFactor error:", err);
     }
@@ -399,10 +427,17 @@ export function useProtocolPositions(
   const [loading, setLoading]     = useState(false);
   const [error, setError]         = useState<string | null>(null);
   const timerRef                  = useRef<ReturnType<typeof setInterval> | null>(null);
+  // Tracks whether we have at least one successful scan so we can suppress
+  // transient errors on subsequent polls rather than flash an error banner.
+  const hasGoodDataRef            = useRef(false);
 
-  const rpcUrl = network === "mainnet"
-    ? getJsonRpcFullnodeUrl("mainnet")
-    : getJsonRpcFullnodeUrl("testnet");
+  // Allow a custom RPC endpoint via env var so a dedicated node can be dropped
+  // in for the demo without code changes. Falls back to the public fullnode.
+  const rpcUrl =
+    (typeof process !== "undefined" && process.env.NEXT_PUBLIC_SUI_RPC_URL) ||
+    (network === "mainnet"
+      ? getJsonRpcFullnodeUrl("mainnet")
+      : getJsonRpcFullnodeUrl("testnet"));
 
   // Stable JSON key so the effect only re-runs when prices actually change
   const pricesKey = cgPrices ? JSON.stringify(cgPrices) : "null";
@@ -414,19 +449,39 @@ export function useProtocolPositions(
       return;
     }
     setLoading(true);
+
     try {
-      const client = new SuiJsonRpcClient({ url: rpcUrl, network: network as "mainnet" | "testnet" });
+      // Retry the entire scan up to 3 times (delays: 300 ms, 700 ms) before
+      // surfacing an error. This handles transient rate-limit blips on the
+      // public Sui fullnode without flashing an error banner on every poll.
+      const [naviPos, fallbackPos] = await withRetry(
+        async () => {
+          const client = new SuiJsonRpcClient({ url: rpcUrl, network: network as "mainnet" | "testnet" });
+          return Promise.all([
+            fetchNaviPositions(walletAddress, network, cgPrices),
+            fetchFallbackPositions(client, walletAddress),
+          ]);
+        },
+        3,
+        [300, 700],
+      );
 
-      // Navi SDK and raw scanner run in parallel; each is independently fault-tolerant.
-      const [naviPos, fallbackPos] = await Promise.all([
-        fetchNaviPositions(walletAddress, network, cgPrices),
-        fetchFallbackPositions(client, walletAddress),
-      ]);
-
-      setPositions([...naviPos, ...fallbackPos]);
+      const merged = [...naviPos, ...fallbackPos];
+      hasGoodDataRef.current = true;
+      setPositions(merged);
       setError(null);
     } catch (e: any) {
-      setError(String(e?.message ?? e));
+      const msg = String(e?.message ?? e);
+      console.warn("[useProtocolPositions] Scan failed after retries:", msg);
+
+      if (hasGoodDataRef.current) {
+        // We already have good data on screen — keep it and suppress the error
+        // banner so the dashboard doesn't flash an error on every rate-limit blip.
+        setError(null);
+      } else {
+        // First-ever scan failed — surface the error so the user knows.
+        setError(msg);
+      }
     } finally {
       setLoading(false);
     }
@@ -436,7 +491,10 @@ export function useProtocolPositions(
   useEffect(() => {
     fetchAll();
     if (walletAddress) {
-      timerRef.current = setInterval(fetchAll, 30_000);
+      // 45 s interval: the public Sui RPC + Navi SDK make ~10 calls per scan;
+      // 30 s was triggering intermittent 429s. 45 s stays responsive for a
+      // risk dashboard while staying well within public rate limits.
+      timerRef.current = setInterval(fetchAll, 45_000);
     }
     return () => {
       if (timerRef.current) clearInterval(timerRef.current);
